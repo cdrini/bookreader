@@ -280,7 +280,7 @@ BookReader.prototype.BRSearchCallback = function(results, options) {
   this.updateSearchHilites();
   this.removeProgressPopup();
   if (firstResultIndex !== null) {
-    this.jumpToIndex(firstResultIndex);
+    this.jumpToIndex(firstResultIndex, null, null, null, false);
   }
 }
 
@@ -532,7 +532,7 @@ BookReader.prototype.addSearchResult = function(queryString, pageIndex) {
       // closures are nested and deep, using an arrow function breaks references.
       // Todo: update to arrow function & clean up closures
       // to remove `bind` dependency
-      this.jumpToIndex($(event.target).data('pageIndex'));
+      this.jumpToIndex($(event.target).data('pageIndex'), null, null, null, false);
     }.bind(this))
     .animate({top:'-25px'}, 'slow');
 
@@ -543,7 +543,7 @@ BookReader.prototype.addSearchResult = function(queryString, pageIndex) {
     const onResultsClick = (e) => {
       e.preventDefault();
       this.switchMode(this.constMode1up);
-      this.jumpToIndex(pageIndex);
+      this.jumpToIndex(pageIndex, null, null, null, false);
       this.refs.$mmenu.data('mmenu').close();
     };
     $(

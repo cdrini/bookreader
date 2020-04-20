@@ -1299,20 +1299,23 @@ BookReader.prototype._isIndexDisplayed = function(index) {
  * @param {number} [pageX]
  * @param {number} [pageY]
  * @param {boolean} [noAnimate]
+ * @param {boolean} [collapsePreviews] whether to jump over preview ranges
  */
-BookReader.prototype.jumpToIndex = function(index, pageX, pageY, noAnimate) {
+BookReader.prototype.jumpToIndex = function(index, pageX, pageY, noAnimate, collapsePreviews=true) {
   const prevCurrentIndex = this.currentIndex();
 
   // Don't jump into specific preview page
-  const page = this._models.book.getPage(index);
-  if (page.isPreview && page.previewStart != page.index) {
-    // If already in preview range, jump to end of preview range
-    const alreadyInPreview = this._isIndexDisplayed(page.previewStart);
-    const newIndex = alreadyInPreview ? page.nextCollapsedPreviews.index : page.previewStart;
-    console.log({alreadyInPreview, index, newIndex});
-    return this.jumpToIndex(newIndex, pageX, pageY, noAnimate);
+  if (collapsePreviews) {
+    const page = this._models.book.getPage(index);
+    if (page.isPreview && page.previewStart != page.index) {
+      // If already in preview range, jump to end of preview range
+      const alreadyInPreview = this._isIndexDisplayed(page.previewStart);
+      const newIndex = alreadyInPreview ? page.nextCollapsedPreviews.index : page.previewStart;
+      console.log({alreadyInPreview, index, newIndex});
+      return this.jumpToIndex(newIndex, pageX, pageY, noAnimate, collapsePreviews);
+    }
+    console.log({index});
   }
-  console.log({index});
 
   this.trigger(BookReader.eventNames.stop);
 
