@@ -41,6 +41,7 @@
     "jest": "26.4.2",
     "live-server": "1.2.1",
     "node-fetch": "2.6.1",
+    "paper": "0.12.7",
     "regenerator-runtime": "0.13.7",
     "sass": "1.26.11",
     "sinon": "9.1.0",

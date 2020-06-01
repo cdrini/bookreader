@@ -13,6 +13,7 @@ module.exports = {
     'plugins/plugin.autoplay.js': { import: './src/js/plugins/plugin.autoplay.js', dependOn: 'BookReader.js' },
     'plugins/plugin.chapters.js': { import: './src/js/plugins/plugin.chapters.js', dependOn: 'BookReader.js' },
     'plugins/plugin.iframe.js': { import: './src/js/plugins/plugin.iframe.js', dependOn: 'BookReader.js' },
+    'plugins/plugin.ink.js': { import: './src/js/plugins/plugin.ink.js', dependOn: 'BookReader.js' },
     'plugins/plugin.menu_toggle.js': { import: './src/js/plugins/menu_toggle/plugin.menu_toggle.js', dependOn: 'BookReader.js' },
     'plugins/plugin.mobile_nav.js': { import: './src/js/plugins/plugin.mobile_nav.js', dependOn: 'BookReader.js' },
     'plugins/plugin.print.js': { import: './src/js/plugins/plugin.print.js', dependOn: 'BookReader.js' },

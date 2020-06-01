@@ -656,9 +656,9 @@ BookReader.prototype.drawLeafs = function() {
 
 /**
  * @protected
+ * @param {import('./BookReader/BookModel').PageModel} page
  */
-BookReader.prototype._createPageContainer = function(index, styles) {
-  const { pageSide } = this._models.book.getPage(index);
+BookReader.prototype._createPageContainer = function(page, styles = {}) {
   const css = Object.assign({ position: 'absolute' }, styles);
   const modeClasses = {
     [this.constMode1up]: '1up',
@@ -666,9 +666,12 @@ BookReader.prototype._createPageContainer = function(index, styles) {
     [this.constModeThumb]: 'thumb',
   };
   const container = $('<div />', {
-    'class': `BRpagecontainer BRmode${modeClasses[this.mode]} pagediv${index}`,
+    'class': `BRpagecontainer BRmode${modeClasses[this.mode]} pagediv${page.index}`,
     css,
-  }).attr('data-side', pageSide).append($('<div />', { 'class': 'BRscreen' }));
+  })
+    .attr('data-side', page.pageSide)
+    .data('page-index', page.index)
+    .append($('<div />', { 'class': 'BRscreen' }));
   container.toggleClass('protected', this.protected);
 
   return container;
@@ -760,7 +763,7 @@ BookReader.prototype.drawLeafsOnePage = function() {
       const width = Math.floor(page.width / this.reduce);
       const leftMargin = Math.floor((containerWidth - width) / 2);
 
-      const pageContainer = this._createPageContainer(index, {
+      const pageContainer = this._createPageContainer(page, {
         width:`${width}px`,
         height: `${height}px`,
         top: `${leafTop}px`,
@@ -906,8 +909,9 @@ BookReader.prototype.drawLeafsThumbnail = function(seekIndex) {
     if (utils.notInArray(row, this.displayedRows)) {
       if (!leafMap[row]) { continue; }
       for (const { num: leaf, left: leafLeft } of leafMap[row].leafs) {
+        const page = book.getPage(leaf);
         const leafWidth = this.thumbWidth;
-        const leafHeight = floor((book.getPageHeight(leaf) * this.thumbWidth) / book.getPageWidth(leaf));
+        const leafHeight = floor((page.height * this.thumbWidth) / page.width);
         const leafTop = leafMap[row].top;
         let left = leafLeft + pageViewBuffer;
         if ('rl' == this.pageProgression) {
@@ -915,7 +919,7 @@ BookReader.prototype.drawLeafsThumbnail = function(seekIndex) {
         }
 
         left += this.thumbPadding;
-        const pageContainer = this._createPageContainer(leaf, {
+        const pageContainer = this._createPageContainer(page, {
           width: `${leafWidth}px`,
           height: `${leafHeight}px`,
           top: `${leafTop}px`,
@@ -939,7 +943,7 @@ BookReader.prototype.drawLeafsThumbnail = function(seekIndex) {
         this.refs.$brPageViewEl.append(pageContainer);
 
         const img = document.createElement("img");
-        const thumbReduce = floor(book.getPageWidth(leaf) / this.thumbWidth);
+        const thumbReduce = floor(page.width / this.thumbWidth);
 
         $(img).attr('src', `${this.imagesBaseURL}transparent.png`)
           .css({ width: `${leafWidth}px`, height: `${leafHeight}px` })
@@ -1675,7 +1679,7 @@ BookReader.prototype.prepareOnePageView = function() {
   this.refs.$brContainer.append(this.refs.$brPageViewEl);
 
   // Attaches to first child - child must be present
-  this.refs.$brContainer.dragscrollable();
+  // this.refs.$brContainer.dragscrollable();
   this.bindGestures(this.refs.$brContainer);
 
   // $$$ keep select enabled for now since disabling it breaks keyboard
@@ -1696,7 +1700,7 @@ BookReader.prototype.prepareThumbnailView = function() {
 
   this.refs.$brPageViewEl = $("<div class='BRpageview'></div>");
   this.refs.$brContainer.append(this.refs.$brPageViewEl);
-  this.refs.$brContainer.dragscrollable({preventDefault:true});
+  // this.refs.$brContainer.dragscrollable({preventDefault:true});
 
   this.bindGestures(this.refs.$brContainer);
 
@@ -1929,6 +1933,7 @@ BookReader.prototype._scrollAmount = function() {
 };
 
 BookReader.prototype.prefetchImg = function(index) {
+  const {book} = this._models;
   var pageURI = this._getPageURI(index);
   const pageURISrcset = this._getPageURISrcset(index);
 
@@ -1941,7 +1946,7 @@ BookReader.prototype.prefetchImg = function(index) {
   }
 
   if (loadImage) {
-    const pageContainer = this._createPageContainer(index);
+    const pageContainer = this._createPageContainer(book.getPage(index));
     $('<img />', {
       'class': 'BRpageimage',
       src: pageURI,

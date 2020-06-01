@@ -150,7 +150,7 @@ export class Mode2Up {
     this.br.refs.$brContainer.append($twoPageViewEl);
 
     // Attaches to first child, so must come after we add the page view
-    this.br.refs.$brContainer.dragscrollable({preventDefault:true});
+    // this.br.refs.$brContainer.dragscrollable({preventDefault:true});
     this.br.bindGestures(this.br.refs.$brContainer);
 
     // $$$ calculate first then set
