@@ -28,20 +28,28 @@ export class BookModel {
   }
 
   /**
+   * @deprecated Use getMedianPageSizeInches
    * Memoized
    * @return {{width: number, height: number}}
    */
   getMedianPageSize() {
+    const medianInches = this.getMedianPageSizeInches();
+    return {
+      width: medianInches.width / 500,
+      height: medianInches.height / 500,
+    }
+  }
+
+  getMedianPageSizeInches() {
     if (this._medianPageSize) {
       return this._medianPageSize;
     }
 
-    // A little expensive but we just do it once
     const widths = [];
     const heights = [];
-    for (let i = 0; i < this.getNumLeafs(); i++) {
-      widths.push(this.getPageWidth(i));
-      heights.push(this.getPageHeight(i));
+    for (const page of this.pagesIterator()) {
+      widths.push(page.widthInches);
+      heights.push(page.heightInches);
     }
 
     widths.sort();
@@ -346,10 +354,13 @@ class PageModel {
    * @param {PageIndex} index
    */
   constructor(book, index) {
+    this.ppi = book._getDataProp(index, 'ppi', 500); // TODO
     this.book = book;
     this.index = index;
     this.width = book.getPageWidth(index);
+    this.widthInches = this.width / this.ppi;
     this.height = book.getPageHeight(index);
+    this.heightInches = this.height / this.ppi;
     this.pageSide = book.getPageSide(index);
     this.leafNum = book._getDataProp(index, 'leafNum', this.index);
 

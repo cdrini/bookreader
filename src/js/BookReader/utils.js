@@ -159,3 +159,17 @@ export function PolyfilledCustomEvent(eventName, {bubbles = false, cancelable = 
   event.initCustomEvent(eventName, bubbles, cancelable, detail);
   return event;
 }
+
+/**
+ * Returns the number pixels something should be rendered at to be ~1n on the users
+ * screen when measured with a ruler.
+ */
+export function calcScreenDPI() {
+  const el = document.createElement('div');
+  el.style = 'width: 1in;'
+  document.body.appendChild(el);
+  const dpi = el.offsetWidth;
+  document.body.removeChild(el);
+
+  return dpi * devicePixelRatio;
+}

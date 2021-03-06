@@ -1,5 +1,5 @@
 // @ts-check
-import { notInArray } from '../BookReader/utils.js';
+import { calcScreenDPI, notInArray } from '../BookReader/utils.js';
 /** @typedef {import('../BookReader.js').default} BookReader */
 /** @typedef {import('./BookModel.js').BookModel} BookModel */
 /** @typedef {import('./BookModel.js').PageIndex} PageIndex */
@@ -12,7 +12,19 @@ export class Mode1Up {
   constructor(br, bookModel) {
     this.br = br;
     this.book = bookModel;
+
+    /** @private */
+    this.$documentContainer = $('<div class="BRpageview" />');
+
+    this.screenDPI = calcScreenDPI();
+    /** @private */
+    this.LEAF_SPACING_IN = 0.2;
   }
+
+  /** @private */
+  get $scrollContainer() { return this.br.refs.$brContainer; }
+
+  get reduce() { return this.br.reduce; }
 
   /**
    * This is called when we switch to one page view
@@ -20,110 +32,116 @@ export class Mode1Up {
   prepare() {
     const startLeaf = this.br.currentIndex();
 
-    this.br.refs.$brContainer.empty();
-    this.br.refs.$brContainer.css({
-      overflowY: 'scroll',
-      overflowX: 'auto'
-    });
-
-    this.br.refs.$brPageViewEl = $("<div class='BRpageview'></div>");
-    this.br.refs.$brContainer.append(this.br.refs.$brPageViewEl);
+    this.$scrollContainer
+      .empty()
+      .css({
+        overflowY: 'scroll',
+        overflowX: 'auto'
+      });
+    this.$scrollContainer.append(this.$documentContainer);
 
     // Attaches to first child - child must be present
-    this.br.refs.$brContainer.dragscrollable();
-    this.br.bindGestures(this.br.refs.$brContainer);
-
-    // $$$ keep select enabled for now since disabling it breaks keyboard
-    //     nav in FF 3.6 (https://bugs.edge.launchpad.net/bookreader/+bug/544666)
-    // utils.disableSelect(this.$('#BRpageview'));
+    this.$scrollContainer.dragscrollable();
+    this.br.bindGestures(this.$scrollContainer);
 
     this.resizePageView();
+
+    // Draw leafs
+
     this.br.jumpToIndex(startLeaf);
     this.br.updateBrClasses();
   }
 
-  drawLeafs() {
-    const { book } = this;
-    const containerHeight = this.br.refs.$brContainer.height();
-    const containerWidth = this.br.refs.$brPageViewEl.width();
-    const scrollTop = this.br.refs.$brContainer.prop('scrollTop');
-    const scrollBottom = scrollTop + containerHeight;
+  /** @param {number} inches */
+  physicalInchesToDisplayPixels(inches) {
+    return inches * this.screenDPI / this.reduce;
+  }
 
-    const indicesToDisplay = [];
+  /** Iterate over pages, augmented with their top/bottom bounds */
+  * pagesWithBounds() {
     let leafTop = 0;
     let leafBottom = 0;
 
-    for (const page of book.pagesIterator({ combineConsecutiveUnviewables: true })) {
-      const height = Math.floor(page.height / this.br.reduce);
+    for (const page of this.book.pagesIterator({ combineConsecutiveUnviewables: true })) {
+      const height = this.physicalInchesToDisplayPixels(page.heightInches);
       leafBottom += height;
-      const topInView = (leafTop >= scrollTop) && (leafTop <= scrollBottom);
-      const bottomInView = (leafBottom >= scrollTop) && (leafBottom <= scrollBottom);
-      const middleInView = (leafTop <= scrollTop) && (leafBottom >= scrollBottom);
-      if (topInView || bottomInView || middleInView) {
-        indicesToDisplay.push(page.index);
-      }
-      leafTop += height + 10;
-      leafBottom += 10;
+      yield { page, top: leafTop, bottom: leafBottom };
+      leafTop += height + this.physicalInchesToDisplayPixels(this.LEAF_SPACING_IN);
+      leafBottom += this.physicalInchesToDisplayPixels(this.LEAF_SPACING_IN);
     }
+  }
+
+  /**
+   * @param {{ top: number; bottom: number; }} bound1
+   * @param {{ top: number; bottom: number; }} bound2
+   */
+  static boundsIntersect(bound1, bound2) {
+    return (bound1.bottom >= bound2.top) && (bound1.top <= bound2.bottom);
+  }
+
+  /**
+   * Find the pages that intersect the current viewport, including 1 before/after
+   **/
+  * findIntersectingPages() {
+    // Rectangle of interest
+    const height = this.$scrollContainer.height();
+    const scrollTop = this.br.refs.$brContainer.scrollTop();
+    const scrollBottom = scrollTop + height;
+    const scrollRegion = { top: scrollTop, bottom: scrollBottom };
+
+    let prev = null;
+    for (const {page, top, bottom} of this.pagesWithBounds()) {
+      const intersects = Mode1Up.boundsIntersect({ top, bottom }, scrollRegion);
+      const cur = {page, top, bottom, intersects};
+      if (intersects) {
+        // Also yield the page just before the visible page
+        if (!prev?.intersects) yield prev;
+        yield cur;
+      }
+      // Also yield the page just after the last visible page
+      else if (prev?.intersects) {
+        yield cur;
+        break;
+      }
+      prev = cur;
+    }
+  }
+
+  drawLeafs() {
+    const pagesToDisplay = Array.from(this.findIntersectingPages());
 
     // Based of the pages displayed in the view we set the current index
     // $$$ we should consider the page in the center of the view to be the current one
-    let firstIndexToDraw = indicesToDisplay[0];
-    this.br.updateFirstIndex(firstIndexToDraw);
+    this.br.updateFirstIndex(pagesToDisplay.find(({intersects}) => intersects).page.index);
 
-    // if zoomed out, also draw prev/next pages
-    if (this.br.reduce > 1) {
-      const prev = book.getPage(firstIndexToDraw).findPrev({ combineConsecutiveUnviewables: true });
-      if (prev) indicesToDisplay.unshift(firstIndexToDraw = prev.index);
+    for (const {page, top, bottom} of pagesToDisplay) {
+      if (!this.br.displayedIndices.includes(page.index)) {
+        const height = bottom - top;
+        const width = this.physicalInchesToDisplayPixels(page.widthInches);
 
-      const lastIndexToDraw = indicesToDisplay[indicesToDisplay.length - 1];
-      const next = book.getPage(lastIndexToDraw).findNext({ combineConsecutiveUnviewables: true });
-      if (next) indicesToDisplay.push(next.index);
-    }
-
-    const BRpageViewEl = this.br.refs.$brPageViewEl.get(0);
-    leafTop = 0;
-
-    for (const page of book.pagesIterator({ end: firstIndexToDraw, combineConsecutiveUnviewables: true })) {
-      leafTop += Math.floor(page.height / this.br.reduce) + 10;
-    }
-
-    for (const index of indicesToDisplay) {
-      const page = book.getPage(index);
-      const height = Math.floor(page.height / this.br.reduce);
-
-      if (!this.br.displayedIndices.includes(index)) {
-        const width = Math.floor(page.width / this.br.reduce);
-        const leftMargin = Math.floor((containerWidth - width) / 2);
-
-        const pageContainer = this.br._createPageContainer(index, {
+        this.br._createPageContainer(page.index, {
           width,
           height,
-          top: leafTop,
-          left: leftMargin,
-        });
-
-        const pageURISrcset = this.br.options.useSrcSet ? this.br._getPageURISrcset(index, this.br.reduce, 0) : [];
-        const img = $('<img />', {
-          src: page.getURI(this.br.reduce, 0),
-          srcset: pageURISrcset,
-          alt: 'Book page image'
-        });
-        pageContainer.append(img);
-
-        BRpageViewEl.appendChild(pageContainer[0]);
+          top,
+          left: Math.floor((this.$documentContainer.width() - width) / 2),
+        })
+          .append($('<img />', {
+            src: page.getURI(this.br.reduce, 0),
+            srcset: this.br.options.useSrcSet ? this.br._getPageURISrcset(page.index, this.br.reduce, 0) : '',
+            alt: 'Book page image',
+          }))
+          .appendTo(this.$documentContainer);
       }
-
-      leafTop += height + 10;
     }
 
+    const displayedIndices = pagesToDisplay.map(({page}) => page.index);
     for (const index of this.br.displayedIndices) {
-      if (notInArray(index, indicesToDisplay)) {
+      if (notInArray(index, displayedIndices)) {
         this.br.$(`.pagediv${index}`).remove();
       }
     }
 
-    this.br.displayedIndices = indicesToDisplay.slice();
+    this.br.displayedIndices = displayedIndices;
     if (this.br.enableSearch) this.br.updateSearchHilites();
 
     this.br.updateToolbarZoom(this.br.reduce);
@@ -202,15 +220,17 @@ export class Mode1Up {
   }
 
   getAutofitWidth() {
-    const medianPageWidth = this.book.getMedianPageSize().width;
-    const availableWidth = this.br.refs.$brContainer.prop('clientWidth');
+    const medianWidthInches = this.book.getMedianPageSizeInches().width;
+    const medianPageWidth = this.physicalInchesToDisplayPixels(medianWidthInches);
+    const availableWidth = this.$scrollContainer.prop('clientWidth');
     const widthPadding = 20;
     return medianPageWidth / (availableWidth - 2 * widthPadding);
   }
 
   getAutofitHeight() {
-    const medianPageHeight = this.book.getMedianPageSize().height;
-    const availableHeight = this.br.refs.$brContainer.innerHeight();
+    const medianHeightInches = this.book.getMedianPageSizeInches().height;
+    const medianPageHeight = this.physicalInchesToDisplayPixels(medianHeightInches);
+    const availableHeight = this.$scrollContainer.innerHeight();
     // make sure a little of adjacent pages show
     return medianPageHeight / (availableHeight - 2 * this.br.padding);
   }
@@ -221,13 +241,9 @@ export class Mode1Up {
    * @return {number}
    */
   getPageTop(index) {
-    const { floor } = Math;
-    const { book } = this;
-    let leafTop = 0;
-    for (const page of book.pagesIterator({ end: index, combineConsecutiveUnviewables: true })) {
-      leafTop += floor(page.height / this.br.reduce) + this.br.padding;
+    for (const {page, top} of this.pagesWithBounds()) {
+      if (page.index == index) return top;
     }
-    return leafTop;
   }
 
   /**
@@ -248,10 +264,10 @@ export class Mode1Up {
    * Note this calls drawLeafs
    */
   resizePageView() {
-    const viewWidth  = this.br.refs.$brContainer.prop('clientWidth');
-    const oldScrollTop  = this.br.refs.$brContainer.prop('scrollTop');
-    const oldPageViewHeight = this.br.refs.$brPageViewEl.height();
-    const oldPageViewWidth = this.br.refs.$brPageViewEl.width();
+    const viewWidth  = this.$scrollContainer.prop('clientWidth');
+    const oldScrollTop  = this.$scrollContainer.prop('scrollTop');
+    const oldPageViewHeight = this.$documentContainer.height();
+    const oldPageViewWidth = this.$documentContainer.width();
 
     // May have come here after preparing the view, in which case the scrollTop and view height are not set
 
@@ -283,10 +299,9 @@ export class Mode1Up {
       this.br.reduce = reductionFactor.reduce;
     }
 
-    const viewDimensions = this.calculateViewDimensions(this.br.reduce, this.br.padding);
-
-    this.br.refs.$brPageViewEl.height(viewDimensions.height);
-    this.br.refs.$brPageViewEl.width(viewDimensions.width);
+    const viewDimensions = this.calculateViewDimensions();
+    this.$documentContainer.height(viewDimensions.height);
+    this.$documentContainer.width(viewDimensions.width);
 
 
     const newCenterY = scrollRatio * viewDimensions.height;
@@ -299,7 +314,7 @@ export class Mode1Up {
     newLeft = Math.max(newLeft, 0);
     this.br.refs.$brContainer.prop('scrollLeft', newLeft);
 
-    this.br.refs.$brPageViewEl.empty();
+    this.$documentContainer.empty();
     this.br.displayedIndices = [];
     this.drawLeafs();
 
@@ -311,26 +326,22 @@ export class Mode1Up {
 
   /**
    * Calculate the dimensions for a one page view with images at the given reduce and padding
-   * @param {number} reduce
-   * @param {number} padding
    */
-  calculateViewDimensions(reduce, padding) {
-    const { floor } = Math;
-    const { book } = this;
-    let viewWidth = 0;
-    let viewHeight = 0;
-    for (const page of book.pagesIterator({ combineConsecutiveUnviewables: true })) {
-      viewHeight += floor(page.height / reduce) + padding;
-      const width = floor(page.width / reduce);
-      if (width > viewWidth) viewWidth = width;
+  calculateViewDimensions() {
+    let width = 0;
+    let height = 0;
+    for (const {page, bottom} of this.pagesWithBounds()) {
+      const pageWidth = this.physicalInchesToDisplayPixels(page.widthInches);
+      width = Math.max(width, pageWidth);
+      height = bottom;
     }
-    return { width: viewWidth, height: viewHeight };
+    return { width, height };
   }
 
   /**
    * Returns the current offset of the viewport center in scaled document coordinates.
    */
-  centerX($brContainer = this.br.refs.$brContainer, $pagesContainer = this.br.refs.$brPageViewEl) {
+  centerX($brContainer = this.br.refs.$brContainer, $pagesContainer = this.$documentContainer) {
     let centerX;
     if ($pagesContainer.width() < $brContainer.prop('clientWidth')) { // fully shown
       centerX = $pagesContainer.width();
