@@ -636,77 +636,73 @@ BookReader.prototype.resize = function() {
  * Binds keyboard event listeners
  */
 BookReader.prototype.setupKeyListeners = function() {
-  var self = this;
+  const KEY_PGUP = 33;
+  const KEY_PGDOWN = 34;
+  const KEY_END = 35;
+  const KEY_HOME = 36;
 
-  var KEY_PGUP = 33;
-  var KEY_PGDOWN = 34;
-  var KEY_END = 35;
-  var KEY_HOME = 36;
-
-  var KEY_LEFT = 37;
-  var KEY_UP = 38;
-  var KEY_RIGHT = 39;
-  var KEY_DOWN = 40;
+  const KEY_LEFT = 37;
+  const KEY_UP = 38;
+  const KEY_RIGHT = 39;
+  const KEY_DOWN = 40;
   // The minus(-) and equal(=) keys have different mappings for different browsers
-  var KEY_MINUS = 189; // Chrome
-  var KEY_MINUS_F = 173; // Firefox
-  var KEY_NUMPAD_SUBTRACT = 109;
-  var KEY_EQUAL = 187; // Chrome
-  var KEY_EQUAL_F = 61; // Firefox
-  var KEY_NUMPAD_ADD = 107;
+  const KEY_MINUS = 189; // Chrome
+  const KEY_MINUS_F = 173; // Firefox
+  const KEY_NUMPAD_SUBTRACT = 109;
+  const KEY_EQUAL = 187; // Chrome
+  const KEY_EQUAL_F = 61; // Firefox
+  const KEY_NUMPAD_ADD = 107;
 
-  // We use document here instead of window to avoid a bug in jQuery on IE7
-  $(document).keydown(function(e) {
-
+  $(document).on('keydown', e => {
     // Keyboard navigation
-    if (!self.keyboardNavigationIsDisabled(e)) {
+    if (!this.keyboardNavigationIsDisabled(e)) {
       switch (e.keyCode) {
       case KEY_PGUP:
       case KEY_UP:
         // In 1up mode page scrolling is handled by browser
-        if (self.constMode2up == self.mode) {
+        if (this.constMode2up == this.mode) {
           e.preventDefault();
-          self.prev();
+          this.prev();
         }
         break;
       case KEY_DOWN:
       case KEY_PGDOWN:
-        if (self.constMode2up == self.mode) {
+        if (this.constMode2up == this.mode) {
           e.preventDefault();
-          self.next();
+          this.next();
         }
         break;
       case KEY_END:
         e.preventDefault();
-        self.last();
+        this.last();
         break;
       case KEY_HOME:
         e.preventDefault();
-        self.first();
+        this.first();
         break;
       case KEY_LEFT:
-        if (self.constModeThumb != self.mode) {
+        if (this.constModeThumb != this.mode) {
           e.preventDefault();
-          self.left();
+          this.left();
         }
         break;
       case KEY_RIGHT:
-        if (self.constModeThumb != self.mode) {
+        if (this.constModeThumb != this.mode) {
           e.preventDefault();
-          self.right();
+          this.right();
         }
         break;
       case KEY_MINUS:
       case KEY_MINUS_F:
       case KEY_NUMPAD_SUBTRACT:
         e.preventDefault();
-        self.zoom(-1);
+        this.zoom(-1);
         break;
       case KEY_EQUAL:
       case KEY_EQUAL_F:
       case KEY_NUMPAD_ADD:
         e.preventDefault();
-        self.zoom(+1);
+        this.zoom(+1);
         break;
       }
     }
