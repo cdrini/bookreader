@@ -654,57 +654,58 @@ BookReader.prototype.setupKeyListeners = function() {
   const KEY_NUMPAD_ADD = 107;
 
   $(document).on('keydown', e => {
-    // Keyboard navigation
-    if (!this.keyboardNavigationIsDisabled(e)) {
-      switch (e.keyCode) {
-      case KEY_PGUP:
-      case KEY_UP:
-        // In 1up mode page scrolling is handled by browser
-        if (this.constMode2up == this.mode) {
-          e.preventDefault();
-          this.prev();
-        }
-        break;
-      case KEY_DOWN:
-      case KEY_PGDOWN:
-        if (this.constMode2up == this.mode) {
-          e.preventDefault();
-          this.next();
-        }
-        break;
-      case KEY_END:
+    if (this.keyboardNavigationIsDisabled(e) || e.ctrlKey || e.altKey) {
+      return;
+    }
+
+    switch (e.keyCode) {
+    case KEY_PGUP:
+    case KEY_UP:
+      // In 1up mode page scrolling is handled by browser
+      if (this.constMode2up == this.mode) {
         e.preventDefault();
-        this.last();
-        break;
-      case KEY_HOME:
-        e.preventDefault();
-        this.first();
-        break;
-      case KEY_LEFT:
-        if (this.constModeThumb != this.mode) {
-          e.preventDefault();
-          this.left();
-        }
-        break;
-      case KEY_RIGHT:
-        if (this.constModeThumb != this.mode) {
-          e.preventDefault();
-          this.right();
-        }
-        break;
-      case KEY_MINUS:
-      case KEY_MINUS_F:
-      case KEY_NUMPAD_SUBTRACT:
-        e.preventDefault();
-        this.zoom(-1);
-        break;
-      case KEY_EQUAL:
-      case KEY_EQUAL_F:
-      case KEY_NUMPAD_ADD:
-        e.preventDefault();
-        this.zoom(+1);
-        break;
+        this.prev();
       }
+      break;
+    case KEY_DOWN:
+    case KEY_PGDOWN:
+      if (this.constMode2up == this.mode) {
+        e.preventDefault();
+        this.next();
+      }
+      break;
+    case KEY_END:
+      e.preventDefault();
+      this.last();
+      break;
+    case KEY_HOME:
+      e.preventDefault();
+      this.first();
+      break;
+    case KEY_LEFT:
+      if (this.constModeThumb != this.mode) {
+        e.preventDefault();
+        this.left();
+      }
+      break;
+    case KEY_RIGHT:
+      if (this.constModeThumb != this.mode) {
+        e.preventDefault();
+        this.right();
+      }
+      break;
+    case KEY_MINUS:
+    case KEY_MINUS_F:
+    case KEY_NUMPAD_SUBTRACT:
+      e.preventDefault();
+      this.zoom(-1);
+      break;
+    case KEY_EQUAL:
+    case KEY_EQUAL_F:
+    case KEY_NUMPAD_ADD:
+      e.preventDefault();
+      this.zoom(+1);
+      break;
     }
   });
 };
