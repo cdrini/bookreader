@@ -1134,7 +1134,7 @@ BookReader.prototype.enterFullscreen = function(bindKeyboardControls = true) {
   // Note: innerWidth DOES NOT include the scrollbar; BUT, mobile devices
   // _overlay_ the scrollbar so it doesn't take up any width!
   if (fullscreenAllowed() && screen.width === window.innerWidth) {
-    requestFullscreen(document.body);
+    requestFullscreen(document.body, { navigationUI: 'hide' });
   }
 
   this.isFullscreenActive = true;
