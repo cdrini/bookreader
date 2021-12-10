@@ -1,6 +1,6 @@
 {
   "name": "@internetarchive/bookreader",
-  "version": "5.0.0-23",
+  "version": "5.0.0-24",
   "description": "The Internet Archive BookReader.",
   "repository": {
     "type": "git",
@@ -61,7 +61,7 @@
     "hammerjs": "^2.0.8",
     "http-server": "0.12.3",
     "iso-language-codes": "1.1.0",
-    "jest": "27.0.6",
+    "jest": "27.4.3",
     "jquery": "1.11.3",
     "jquery-colorbox": "1.6.4",
     "jquery-ui": "1.12.1",
