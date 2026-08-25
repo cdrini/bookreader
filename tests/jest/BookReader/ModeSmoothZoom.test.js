@@ -147,6 +147,233 @@ describe('ModeSmoothZoom', () => {
     });
   });
 
+  describe("double-tap-and-drag zoom", () => {
+    /** @param {Partial<{clientX: number, clientY: number, timeStamp: number, pointerType: string, touches: any[]}>} overrides */
+    function touchEvent({ clientX = 0, clientY = 0, timeStamp = 0, pointerType = 'touch', touches = [{}] } = {}) {
+      return {
+        clientX,
+        clientY,
+        timeStamp,
+        pointerType,
+        originalEvent: { touches, preventDefault: sinon.spy() },
+        preventDefault: sinon.spy(),
+      };
+    }
+
+    test('drag down after a double-tap zooms in (matches Google Maps/Chrome)', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      // First tap
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      // Second tap, close in time/space -> double-tap candidate
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+      expect(mode.scale).toBe(1);
+      // Drag down (increasing clientY) engages the zoom and increases scale
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 90, timeStamp: 120 }));
+      expect(mode.scale).toBeGreaterThan(1);
+
+      msz._handleTapUp(touchEvent({ clientX: 52, clientY: 90, timeStamp: 140 }));
+      expect(mode.$visibleWorld.classList.contains('BRsmooth-zooming')).toBe(false);
+    });
+
+    test('drag up after a double-tap zooms out (matches Google Maps/Chrome)', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 120 }));
+
+      expect(mode.scale).toBeLessThan(1);
+    });
+
+    test('a lone tap locks touchAction to none, to block native panning if a second tap follows', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+      expect(mode.$container.style.touchAction).not.toBe('none');
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+
+      expect(mode.$container.style.touchAction).toBe('none');
+    });
+
+    test('preventDefault is called on the very first pixel of movement, before the drag-engage threshold', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+
+      // A tiny move, well under DOUBLE_TAP_DRAG_ENGAGE_PX -- the zoom hasn't
+      // engaged yet, but native panning must already be blocked so the
+      // browser can't commit to a scroll before the engage threshold is hit.
+      const tinyMove = touchEvent({ clientX: 52, clientY: 55, timeStamp: 110 });
+      msz._handleTapMove(tinyMove);
+
+      expect(tinyMove.preventDefault.callCount).toBe(1);
+      expect(mode.$visibleWorld.classList.contains('BRsmooth-zooming')).toBe(false);
+    });
+
+    test('touchAction is restored once the double-tap-drag ends', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+      msz.baseTouchAction = 'pan-x pan-y';
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 120 }));
+      expect(mode.$container.style.touchAction).toBe('none');
+
+      msz._handleTapUp(touchEvent({ clientX: 52, clientY: 20, timeStamp: 140 }));
+      expect(mode.$container.style.touchAction).toBe('pan-x pan-y');
+    });
+
+    test('touchAction is restored if a second tap never arrives (candidate window times out)', () => {
+      jest.useFakeTimers();
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+      msz.baseTouchAction = 'pan-x pan-y';
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      expect(mode.$container.style.touchAction).toBe('none');
+
+      jest.advanceTimersByTime(1000);
+      expect(mode.$container.style.touchAction).toBe('pan-x pan-y');
+      jest.useRealTimers();
+    });
+
+    test('a stationary second tap does not change scale', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+      msz._handleTapUp(touchEvent({ clientX: 52, clientY: 52, timeStamp: 110 }));
+
+      expect(mode.scale).toBe(1);
+    });
+
+    test('taps far apart in time do not start a double-tap-drag', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      // Second tap arrives after the double-tap window
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 1000 }));
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 1020 }));
+
+      expect(mode.scale).toBe(1);
+    });
+
+    test('mouse pointers do not trigger double-tap-drag', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0, pointerType: 'mouse', touches: [] }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10, pointerType: 'mouse', touches: [] }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100, pointerType: 'mouse', touches: [] }));
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 120, pointerType: 'mouse', touches: [] }));
+
+      expect(mode.scale).toBe(1);
+    });
+
+    test('a second finger touching down cancels an in-progress double-tap-drag', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 120 }));
+      expect(mode.$visibleWorld.classList.contains('BRsmooth-zooming')).toBe(true);
+      const scaleWhenSecondFingerLands = mode.scale;
+
+      // A second finger touches down mid-gesture
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 10, timeStamp: 130, touches: [{}, {}] }));
+
+      expect(mode.$visibleWorld.classList.contains('BRsmooth-zooming')).toBe(false);
+      expect(mode.scale).toBe(scaleWhenSecondFingerLands);
+    });
+
+    test('a double-tap-drag does not start while pinching', () => {
+      const mode = dummy_mode();
+      const msz = new ModeSmoothZoom(mode);
+      msz.bufferFn = (cb) => cb();
+      msz.pinching = true;
+
+      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+      msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+      msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 120 }));
+
+      expect(mode.scale).toBe(1);
+    });
+
+    describe('runAfterTapResolved', () => {
+      test('runs fn immediately when there is no pending tap (e.g. a mouse click)', () => {
+        const mode = dummy_mode();
+        const msz = new ModeSmoothZoom(mode);
+        const fn = sinon.spy();
+
+        msz.runAfterTapResolved(fn);
+
+        expect(fn.callCount).toBe(1);
+      });
+
+      test('defers fn while a lone tap could still become a double-tap, and drops it if one arrives', () => {
+        jest.useFakeTimers();
+        const mode = dummy_mode();
+        const msz = new ModeSmoothZoom(mode);
+        const fn = sinon.spy();
+
+        msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+        msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+        msz.runAfterTapResolved(fn);
+        expect(fn.callCount).toBe(0);
+
+        // A second tap arrives in time -- the deferred action must never fire.
+        msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+        jest.advanceTimersByTime(1000);
+        expect(fn.callCount).toBe(0);
+        jest.useRealTimers();
+      });
+
+      test('runs the deferred fn if no second tap arrives before the window elapses', () => {
+        jest.useFakeTimers();
+        const mode = dummy_mode();
+        const msz = new ModeSmoothZoom(mode);
+        const fn = sinon.spy();
+
+        msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+        msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+        msz.runAfterTapResolved(fn);
+
+        jest.advanceTimersByTime(1000);
+        expect(fn.callCount).toBe(1);
+        jest.useRealTimers();
+      });
+    });
+  });
+
   describe("updateViewportOnZoom", () => {
     test("adjusts scroll position when zooming in", () => {
       const mode = dummy_mode();

@@ -1,4 +1,5 @@
 import sinon from "sinon";
+import "@/src/jquery-wrapper.js";
 import { BookModel } from "@/src/BookReader/BookModel.js";
 import { Mode2UpLit } from "@/src/BookReader/Mode2UpLit.js";
 
@@ -186,5 +187,55 @@ describe("computePositions", () => {
     const mode = new Mode2UpLit(book, br);
 
     expect(mode.computePositions(book.getPage(-1), null)).toEqual(RIGHT_COVER_EXPECTED);
+  });
+});
+
+describe("handlePageClick", () => {
+  /** @param {'L' | 'R'} side */
+  function pageClickEvent(side) {
+    const target = document.createElement('div');
+    target.classList.add('BRpagecontainer');
+    target.setAttribute('data-side', side);
+    return { which: 1, target };
+  }
+
+  test("routes through smoothZoomer.runAfterTapResolved instead of flipping immediately", () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
+    const book = new BookModel(br);
+    const mode = new Mode2UpLit(book, br);
+    sinon.stub(mode.smoothZoomer, 'runAfterTapResolved');
+
+    mode.handlePageClick(pageClickEvent('R'));
+
+    expect(mode.smoothZoomer.runAfterTapResolved.callCount).toBe(1);
+    expect(br.right.callCount).toBe(0);
+
+    // The deferred callback flips the correct direction once run.
+    mode.smoothZoomer.runAfterTapResolved.firstCall.args[0]();
+    expect(br.right.callCount).toBe(1);
+    expect(br.left.callCount).toBe(0);
+  });
+
+  test("left side flips left", () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
+    const book = new BookModel(br);
+    const mode = new Mode2UpLit(book, br);
+    sinon.stub(mode.smoothZoomer, 'runAfterTapResolved').callsFake((fn) => fn());
+
+    mode.handlePageClick(pageClickEvent('L'));
+
+    expect(br.left.callCount).toBe(1);
+    expect(br.right.callCount).toBe(0);
+  });
+
+  test("ignores clicks outside a page container", () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
+    const book = new BookModel(br);
+    const mode = new Mode2UpLit(book, br);
+    sinon.stub(mode.smoothZoomer, 'runAfterTapResolved');
+
+    mode.handlePageClick({ which: 1, target: document.createElement('div') });
+
+    expect(mode.smoothZoomer.runAfterTapResolved.callCount).toBe(0);
   });
 });
