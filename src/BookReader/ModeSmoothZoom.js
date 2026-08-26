@@ -315,6 +315,11 @@ export class ModeSmoothZoom {
     }
     if (!this.activeTouch.isDoubleTapCandidate) return;
 
+    // iOS already uses double-tap-and-drag natively, for text selection --
+    // don't fight it for the zoom gesture. (The disambiguation above, e.g.
+    // not flipping the page on the first tap, still applies either way.)
+    if (isIOS()) return;
+
     // Block this from the first pixel of movement: touchAction should
     // already have stopped the browser from panning natively, but this is a
     // defensive backstop against browsers that don't fully honor that.
@@ -370,8 +375,13 @@ export class ModeSmoothZoom {
 
       // Preemptively block native panning for a possible second tap, since
       // touchAction is read by the browser at the *start* of that touch --
-      // reacting to it once that touch is already moving is too late.
-      this.mode.$container.style.touchAction = "none";
+      // reacting to it once that touch is already moving is too late. Skip
+      // this on iOS: the zoom gesture it would protect is disabled there
+      // anyway (see _handleTapMove), and iOS uses double-tap-drag natively
+      // for text selection -- don't risk interfering with that too.
+      if (!isIOS()) {
+        this.mode.$container.style.touchAction = "none";
+      }
       clearTimeout(this.doubleTapWindowTimer);
       this.doubleTapWindowTimer = setTimeout(this._disarmDoubleTapWindow, remainingWindowMs);
     } else {
