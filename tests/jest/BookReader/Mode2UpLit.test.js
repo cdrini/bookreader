@@ -199,43 +199,58 @@ describe("handlePageClick", () => {
     return { which: 1, target };
   }
 
-  test("routes through smoothZoomer.runAfterTapResolved instead of flipping immediately", () => {
+  test("routes through smoothZoomer.isSingleTap instead of flipping immediately", async () => {
     const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
     const book = new BookModel(br);
     const mode = new Mode2UpLit(book, br);
-    sinon.stub(mode.smoothZoomer, 'runAfterTapResolved');
+    let resolveIsSingleTap;
+    sinon.stub(mode.smoothZoomer, 'isSingleTap')
+      .returns(new Promise((res) => { resolveIsSingleTap = res; }));
 
-    mode.handlePageClick(pageClickEvent('R'));
+    const clickPromise = mode.handlePageClick(pageClickEvent('R'));
 
-    expect(mode.smoothZoomer.runAfterTapResolved.callCount).toBe(1);
+    expect(mode.smoothZoomer.isSingleTap.callCount).toBe(1);
     expect(br.right.callCount).toBe(0);
 
-    // The deferred callback flips the correct direction once run.
-    mode.smoothZoomer.runAfterTapResolved.firstCall.args[0]();
+    // Only flips once isSingleTap resolves true.
+    resolveIsSingleTap(true);
+    await clickPromise;
     expect(br.right.callCount).toBe(1);
     expect(br.left.callCount).toBe(0);
   });
 
-  test("left side flips left", () => {
+  test("does not flip if isSingleTap resolves false (consumed by a double-tap)", async () => {
     const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
     const book = new BookModel(br);
     const mode = new Mode2UpLit(book, br);
-    sinon.stub(mode.smoothZoomer, 'runAfterTapResolved').callsFake((fn) => fn());
+    sinon.stub(mode.smoothZoomer, 'isSingleTap').resolves(false);
 
-    mode.handlePageClick(pageClickEvent('L'));
+    await mode.handlePageClick(pageClickEvent('R'));
+
+    expect(br.right.callCount).toBe(0);
+    expect(br.left.callCount).toBe(0);
+  });
+
+  test("left side flips left", async () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
+    const book = new BookModel(br);
+    const mode = new Mode2UpLit(book, br);
+    sinon.stub(mode.smoothZoomer, 'isSingleTap').resolves(true);
+
+    await mode.handlePageClick(pageClickEvent('L'));
 
     expect(br.left.callCount).toBe(1);
     expect(br.right.callCount).toBe(0);
   });
 
-  test("ignores clicks outside a page container", () => {
+  test("ignores clicks outside a page container", async () => {
     const br = make_dummy_br({ data: SAMPLE_DATA, left: sinon.spy(), right: sinon.spy() });
     const book = new BookModel(br);
     const mode = new Mode2UpLit(book, br);
-    sinon.stub(mode.smoothZoomer, 'runAfterTapResolved');
+    sinon.stub(mode.smoothZoomer, 'isSingleTap');
 
-    mode.handlePageClick({ which: 1, target: document.createElement('div') });
+    await mode.handlePageClick({ which: 1, target: document.createElement('div') });
 
-    expect(mode.smoothZoomer.runAfterTapResolved.callCount).toBe(0);
+    expect(mode.smoothZoomer.isSingleTap.callCount).toBe(0);
   });
 });
