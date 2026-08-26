@@ -315,11 +315,6 @@ export class ModeSmoothZoom {
     }
     if (!this.activeTouch.isDoubleTapCandidate) return;
 
-    // iOS already uses double-tap-and-drag natively, for text selection --
-    // don't fight it for the zoom gesture. (The disambiguation above, e.g.
-    // not flipping the page on the first tap, still applies either way.)
-    if (isIOS()) return;
-
     // Block this from the first pixel of movement: touchAction should
     // already have stopped the browser from panning natively, but this is a
     // defensive backstop against browsers that don't fully honor that.
@@ -335,11 +330,16 @@ export class ModeSmoothZoom {
     }
 
     // Matches Google Maps/Chrome: drag down to zoom in, drag up to zoom out.
+    // iOS's own double-tap-drag zoom (e.g. Maps, Safari) runs the opposite
+    // way -- drag up to zoom in -- so flip it there to match platform norms.
+    // (Experimental: this competes with iOS's native double-tap-drag text
+    // selection gesture -- trying it out to see if that's worth the tradeoff.)
+    const dyForZoom = isIOS() ? -dy : dy;
     // Reuses pinch-zoom's own scale pipeline (_pinchMove / _drawPinchZoomFrame)
     // by modeling the drag as one finger moving away from a stationary one
     // starting DOUBLE_TAP_DRAG_REFERENCE_PX apart, and feeding the resulting
     // distance ratio in as if it were a pinch gesture's scale.
-    const virtualPinchDistance = Math.max(1, DOUBLE_TAP_DRAG_REFERENCE_PX + dy);
+    const virtualPinchDistance = Math.max(1, DOUBLE_TAP_DRAG_REFERENCE_PX + dyForZoom);
     this._pinchMove({
       scale: virtualPinchDistance / DOUBLE_TAP_DRAG_REFERENCE_PX,
       clientX: this.activeTouch.startX,
@@ -375,13 +375,8 @@ export class ModeSmoothZoom {
 
       // Preemptively block native panning for a possible second tap, since
       // touchAction is read by the browser at the *start* of that touch --
-      // reacting to it once that touch is already moving is too late. Skip
-      // this on iOS: the zoom gesture it would protect is disabled there
-      // anyway (see _handleTapMove), and iOS uses double-tap-drag natively
-      // for text selection -- don't risk interfering with that too.
-      if (!isIOS()) {
-        this.mode.$container.style.touchAction = "none";
-      }
+      // reacting to it once that touch is already moving is too late.
+      this.mode.$container.style.touchAction = "none";
       clearTimeout(this.doubleTapWindowTimer);
       this.doubleTapWindowTimer = setTimeout(this._disarmDoubleTapWindow, remainingWindowMs);
     } else {

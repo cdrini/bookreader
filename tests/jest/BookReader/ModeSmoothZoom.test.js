@@ -224,7 +224,11 @@ describe('ModeSmoothZoom', () => {
     });
 
     describe('on iOS', () => {
-      test('the double-tap-drag zoom does not engage at all, since iOS uses that gesture natively for text selection', () => {
+      // Experimental: this competes with iOS's native double-tap-drag text
+      // selection gesture. Enabled (with direction reversed, to match iOS's
+      // own convention) so people can try it out and weigh in on whether
+      // it's worth that tradeoff -- see _handleTapMove.
+      test('drag down zooms out, and drag up zooms in (reversed, matching iOS\'s own gesture)', () => {
         sinon.stub(browserSniffing, 'isIOS').returns(true);
         const mode = dummy_mode();
         const msz = new ModeSmoothZoom(mode);
@@ -233,16 +237,28 @@ describe('ModeSmoothZoom', () => {
         msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
         msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
         msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
-        const move = touchEvent({ clientX: 52, clientY: 90, timeStamp: 120 });
-        msz._handleTapMove(move);
+        // Drag down; on every other platform this zooms in, but on iOS it
+        // should zoom out instead.
+        msz._handleTapMove(touchEvent({ clientX: 52, clientY: 90, timeStamp: 120 }));
 
-        expect(mode.scale).toBe(1);
-        expect(mode.$visibleWorld.classList.contains('BRsmooth-zooming')).toBe(false);
-        // Doesn't fight the native gesture for it, either.
-        expect(move.preventDefault.callCount).toBe(0);
+        expect(mode.scale).toBeLessThan(1);
       });
 
-      test('touchAction is not preemptively locked after a lone tap, since there is no zoom gesture to protect', () => {
+      test('drag up zooms in, on iOS', () => {
+        sinon.stub(browserSniffing, 'isIOS').returns(true);
+        const mode = dummy_mode();
+        const msz = new ModeSmoothZoom(mode);
+        msz.bufferFn = (cb) => cb();
+
+        msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+        msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+        msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+        msz._handleTapMove(touchEvent({ clientX: 52, clientY: 20, timeStamp: 120 }));
+
+        expect(mode.scale).toBeGreaterThan(1);
+      });
+
+      test('touchAction is preemptively locked to none after a lone tap, same as other platforms', () => {
         sinon.stub(browserSniffing, 'isIOS').returns(true);
         const mode = dummy_mode();
         const msz = new ModeSmoothZoom(mode);
@@ -251,7 +267,7 @@ describe('ModeSmoothZoom', () => {
         msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
         msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
 
-        expect(mode.$container.style.touchAction).not.toBe('none');
+        expect(mode.$container.style.touchAction).toBe('none');
       });
 
       test('a second tap still suppresses the first tap\'s deferred single-tap action (e.g. page flip)', async () => {
