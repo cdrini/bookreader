@@ -143,6 +143,16 @@ export class Mode1UpLit extends LitElement {
     this.scale *= 1 / this.ZOOM_FACTOR;
   }
 
+  /** The scale used when a page first renders (real size if it fits, else full width). */
+  get defaultScale() {
+    return this.computeDefaultScale(this.visiblePages[0]);
+  }
+
+  /** Resets the scale back to defaultScale, e.g. after a double-tap-to-zoom. */
+  resetZoom() {
+    this.scale = this.defaultScale;
+  }
+
   /********************************************/
   /************** INTERNAL STUFF **************/
   /********************************************/

@@ -1,3 +1,4 @@
+import sinon from 'sinon';
 import { BookModel } from '@/src/BookReader/BookModel.js';
 import { Mode1UpLit } from '@/src/BookReader/Mode1UpLit.js';
 
@@ -69,5 +70,32 @@ describe('pageTops', () => {
       ['4', '2.0'],
       ['5', '2.4'],
     ]);
+  });
+});
+
+describe('defaultScale and resetZoom', () => {
+  afterEach(() => sinon.restore());
+
+  test('defaultScale is computeDefaultScale for the first visible page', () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA });
+    const book = new BookModel(br);
+    const mode = new Mode1UpLit(book, br);
+    mode.visiblePages = [book.getPage(0)];
+    sinon.stub(mode, 'computeDefaultScale').withArgs(mode.visiblePages[0]).returns(0.75);
+
+    expect(mode.defaultScale).toBe(0.75);
+  });
+
+  test('resetZoom sets scale back to defaultScale', () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA });
+    const book = new BookModel(br);
+    const mode = new Mode1UpLit(book, br);
+    mode.visiblePages = [book.getPage(0)];
+    sinon.stub(mode, 'computeDefaultScale').returns(0.75);
+    mode.scale = 2;
+
+    mode.resetZoom();
+
+    expect(mode.scale).toBe(0.75);
   });
 });

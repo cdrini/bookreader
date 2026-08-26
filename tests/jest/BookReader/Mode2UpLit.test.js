@@ -254,3 +254,26 @@ describe("handlePageClick", () => {
     expect(mode.smoothZoomer.isSingleTap.callCount).toBe(0);
   });
 });
+
+describe("defaultScale and resetZoom", () => {
+  test("defaultScale is computeScale(firstVisiblePage, 'auto')", () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA });
+    const book = new BookModel(br);
+    const mode = new Mode2UpLit(book, br);
+    mode.visiblePages = [book.getPage(1)];
+    sinon.stub(mode, 'computeScale').withArgs(mode.visiblePages[0], 'auto').returns(0.75);
+
+    expect(mode.defaultScale).toBe(0.75);
+  });
+
+  test("resetZoom sets autoFit back to 'auto'", () => {
+    const br = make_dummy_br({ data: SAMPLE_DATA });
+    const book = new BookModel(br);
+    const mode = new Mode2UpLit(book, br);
+    mode.autoFit = 'none';
+
+    mode.resetZoom();
+
+    expect(mode.autoFit).toBe('auto');
+  });
+});

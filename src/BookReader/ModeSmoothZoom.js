@@ -21,6 +21,13 @@ const DOUBLE_TAP_DRAG_ENGAGE_PX = 10;
  * from a stationary one starting this far apart reproduces that same rate.
  */
 const DOUBLE_TAP_DRAG_REFERENCE_PX = 200;
+/** How much a stationary double-tap zooms in, relative to the page's defaultScale. */
+const DOUBLE_TAP_ZOOM_IN_FACTOR = 1.5;
+/**
+ * How far above defaultScale counts as "already zoomed in", for deciding
+ * whether a stationary double-tap should zoom in or reset back to default.
+ */
+const DOUBLE_TAP_ZOOMED_IN_THRESHOLD = 1.1;
 
 /**
  * @typedef {object} SmoothZoomable
@@ -28,6 +35,8 @@ const DOUBLE_TAP_DRAG_REFERENCE_PX = 200;
  * @property {HTMLElement} $visibleWorld
  * @property {import("./options.js").AutoFitValues} autoFit
  * @property {number} scale
+ * @property {number} defaultScale The scale that fits the page/spread to the viewport.
+ * @property {function(): void} resetZoom Resets back to defaultScale.
  * @property {HTMLDimensionsCacher} htmlDimensionsCacher
  * @property {function(): void} [attachScrollListeners]
  * @property {function(): void} [detachScrollListeners]
@@ -66,6 +75,14 @@ export class ModeSmoothZoom {
     this.doubleTapWindowTimer = null;
     /** Resolver for the in-flight isSingleTap() promise, if any. */
     this._singleTapResolve = null;
+    /**
+     * Set when a stationary double-tap's *second* tap just ended, for the
+     * very next isSingleTap() call to consume: that tap's own native click
+     * (e.g. Mode2UpLit's page-flip handler) fires *after* this, and by then
+     * pendingTap has already been cleared -- so isSingleTap() would
+     * otherwise see no ambiguity at all and wrongly report it as a lone tap.
+     */
+    this._justEndedStationaryDoubleTap = false;
 
     /** @type {function(function(): void): any} */
     this.bufferFn = window.requestAnimationFrame.bind(window);
@@ -127,6 +144,7 @@ export class ModeSmoothZoom {
     this.detachCtrlZoom();
     clearTimeout(this.doubleTapWindowTimer);
     this.doubleTapWindowTimer = null;
+    this._justEndedStationaryDoubleTap = false;
     this._resolveSingleTap(false);
 
     // GestureEvents work only on Safari; they interfere with Hammer,
@@ -265,6 +283,11 @@ export class ModeSmoothZoom {
    * @param {{ pointerType: string, clientX: number, clientY: number, timeStamp: number, originalEvent: Event }} e
    */
   _handleTapDown = (e) => {
+    // A new touch means the window for isSingleTap() to consume this flag
+    // (see its declaration) has closed; don't let it leak into a later, and
+    // by then unrelated, isSingleTap() call.
+    this._justEndedStationaryDoubleTap = false;
+
     const multiTouch = (e.originalEvent?.touches?.length ?? 1) > 1;
     if (this.pinching || multiTouch) {
       this._cancelDoubleTapDrag();
@@ -386,8 +409,39 @@ export class ModeSmoothZoom {
       this.doubleTapWindowTimer = setTimeout(this._disarmDoubleTapWindow, remainingWindowMs);
     } else {
       this._restoreTouchAction();
+      if (wasTap && this.activeTouch.isDoubleTapCandidate) {
+        // This tap's own native click (e.g. Mode2UpLit's page-flip handler)
+        // still hasn't fired -- make sure it doesn't flip the page either.
+        this._justEndedStationaryDoubleTap = true;
+        // A stationary double-tap (no drag) toggles zoom in/out. Skip this
+        // on iOS: it natively double-taps to select the tapped word, and we
+        // don't want to compete with that (same reasoning as the drag zoom).
+        if (!isIOS()) {
+          this._handleStationaryDoubleTap(e);
+        }
+      }
     }
     this.activeTouch = null;
+  }
+
+  /**
+   * A stationary double-tap toggles between zooming in a bit and resetting
+   * back to the page/spread's default scale, matching common "double tap
+   * to zoom" conventions (e.g. Photos apps).
+   * @param {{ clientX: number, clientY: number }} e
+   */
+  _handleStationaryDoubleTap(e) {
+    const defaultScale = this.mode.defaultScale;
+    const isZoomedIn = this.mode.scale > defaultScale * DOUBLE_TAP_ZOOMED_IN_THRESHOLD;
+
+    if (isZoomedIn) {
+      this.scaleCenter = { x: 0.5, y: 0.5 };
+      this.mode.resetZoom();
+    } else {
+      this.mode.autoFit = "none";
+      this.updateScaleCenter({ clientX: e.clientX, clientY: e.clientY });
+      this.mode.scale = defaultScale * DOUBLE_TAP_ZOOM_IN_FACTOR;
+    }
   }
 
   /**
@@ -398,6 +452,10 @@ export class ModeSmoothZoom {
    * @returns {Promise<boolean>}
    */
   isSingleTap() {
+    if (this._justEndedStationaryDoubleTap) {
+      this._justEndedStationaryDoubleTap = false;
+      return Promise.resolve(false);
+    }
     if (!this.pendingTap) return Promise.resolve(true);
     return new Promise((resolve) => {
       this._singleTapResolve = resolve;

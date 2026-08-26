@@ -10,10 +10,11 @@ import { ModeSmoothZoom, TouchesMonitor } from '@/src/BookReader/ModeSmoothZoom.
  * @returns {SmoothZoomable}
  */
 function dummy_mode(overrides = {}) {
-  return {
+  const mode = {
     $container: document.createElement('div'),
     $visibleWorld: document.createElement('div'),
     scale: 1,
+    defaultScale: 1,
     htmlDimensionsCacher: {
       clientWidth: 100,
       clientHeight: 100,
@@ -22,6 +23,10 @@ function dummy_mode(overrides = {}) {
     scaleCenter: {x: 0.5, y: 0.5},
     ...overrides,
   };
+  if (!('resetZoom' in overrides)) {
+    mode.resetZoom = () => { mode.scale = mode.defaultScale; };
+  }
+  return mode;
 }
 
 afterEach(() => {
@@ -354,17 +359,45 @@ describe('ModeSmoothZoom', () => {
       jest.useRealTimers();
     });
 
-    test('a stationary second tap does not change scale', async () => {
-      const mode = dummy_mode();
-      const msz = new ModeSmoothZoom(mode);
-      msz.bufferFn = (cb) => cb();
+    describe('a stationary double-tap (no drag)', () => {
+      /** @param {ModeSmoothZoom} msz */
+      function doStationaryDoubleTap(msz) {
+        msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
+        msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
+        msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
+        return msz._handleTapUp(touchEvent({ clientX: 52, clientY: 52, timeStamp: 110 }));
+      }
 
-      msz._handleTapDown(touchEvent({ clientX: 50, clientY: 50, timeStamp: 0 }));
-      await msz._handleTapUp(touchEvent({ clientX: 50, clientY: 50, timeStamp: 10 }));
-      msz._handleTapDown(touchEvent({ clientX: 52, clientY: 52, timeStamp: 100 }));
-      await msz._handleTapUp(touchEvent({ clientX: 52, clientY: 52, timeStamp: 110 }));
+      test('zooms in a bit, when not already zoomed in', async () => {
+        const mode = dummy_mode({ defaultScale: 2 });
+        const msz = new ModeSmoothZoom(mode);
+        msz.bufferFn = (cb) => cb();
 
-      expect(mode.scale).toBe(1);
+        await doStationaryDoubleTap(msz);
+
+        expect(mode.scale).toBeGreaterThan(mode.defaultScale);
+      });
+
+      test('resets to defaultScale, when already zoomed in', async () => {
+        const mode = dummy_mode({ defaultScale: 2, scale: 5 });
+        const msz = new ModeSmoothZoom(mode);
+        msz.bufferFn = (cb) => cb();
+
+        await doStationaryDoubleTap(msz);
+
+        expect(mode.scale).toBe(mode.defaultScale);
+      });
+
+      test('does not zoom on iOS, which double-taps to select the word instead', async () => {
+        sinon.stub(browserSniffing, 'isIOS').returns(true);
+        const mode = dummy_mode({ defaultScale: 2 });
+        const msz = new ModeSmoothZoom(mode);
+        msz.bufferFn = (cb) => cb();
+
+        await doStationaryDoubleTap(msz);
+
+        expect(mode.scale).toBe(1);
+      });
     });
 
     test('taps far apart in time do not start a double-tap-drag', () => {

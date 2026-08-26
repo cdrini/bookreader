@@ -208,6 +208,16 @@ export class Mode2UpLit extends LitElement {
     this.scale *= 1 / this.ZOOM_FACTOR;
   }
 
+  /** The scale that fits the current spread to the viewport (autoFit 'auto'). */
+  get defaultScale() {
+    return this.computeScale(this.visiblePages[0], 'auto');
+  }
+
+  /** Resets back to autofitting the spread, e.g. after a double-tap-to-zoom. */
+  resetZoom() {
+    this.autoFit = 'auto';
+  }
+
   /********************************************/
   /************** INTERNAL STUFF **************/
   /********************************************/
