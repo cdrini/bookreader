@@ -1,6 +1,7 @@
 import { html } from 'lit';
 import '@internetarchive/icon-visual-adjustment/icon-visual-adjustment.js';
 import './visual-adjustments.js';
+import { loadAdjustments, saveAdjustments } from './visual-adjustments-storage.js';
 
 const visualAdjustmentOptions = [{
   id: 'brightness',
@@ -28,6 +29,21 @@ const visualAdjustmentOptions = [{
   active: false,
 }];
 
+const filterForOption = {
+  brightness: (value) => `brightness(${value}%)`,
+  contrast: (value) => `contrast(${value}%)`,
+  grayscale: () => 'grayscale(100%)',
+  invert: () => 'invert(100%)',
+};
+
+/**
+ * Providers are recreated whenever ia-bookreader re-initializes its submenus,
+ * so the live options are kept here to survive that even when they can't be
+ * persisted (no bookUri or no localStorage).
+ * @type {{ bookUri: string, options: typeof visualAdjustmentOptions } | null}
+ */
+let sessionState = null;
+
 export default class VisualAdjustmentsProvider {
   constructor({ onProviderChange, bookreader }) {
     this.onProviderChange = onProviderChange;
@@ -40,19 +56,48 @@ export default class VisualAdjustmentsProvider {
     this.onZoomIn = this.onZoomIn.bind(this);
     this.onZoomOut = this.onZoomOut.bind(this);
 
-    this.activeCount = 0;
+    this.bookUri = bookreader.options?.bookUri;
+    this.options = this.restoreOptions();
+    this.activeCount = this.options.filter(option => option.active).length;
+    if (this.activeCount) this.applyFilters(this.options);
+
     this.icon = html`<ia-icon-visual-adjustment aria-hidden="true" role="presentation" style="width: var(--iconWidth); height: var(--iconHeight);"></ia-icon-visual-adjustment>`;
     this.label = 'Visual Adjustments';
-    this.menuDetails = this.updateOptionsCount();
+    this.updateOptionsCount();
     this.id = 'visualAdjustments';
     this.component = html`
       <ia-book-visual-adjustments
-        .options=${visualAdjustmentOptions}
+        .options=${this.options}
         @visualAdjustmentOptionChanged=${this.onAdjustmentChange}
         @visualAdjustmentZoomIn=${this.onZoomIn}
         @visualAdjustmentZoomOut=${this.onZoomOut}
       ></ia-book-visual-adjustments>
     `;
+  }
+
+  /** Default options, overridden by any adjustments saved for this book */
+  restoreOptions() {
+    if (sessionState && sessionState.bookUri === this.bookUri) return sessionState.options;
+    const saved = loadAdjustments(this.bookUri) || {};
+    const options = visualAdjustmentOptions.map((option) => {
+      const { active, value } = saved[option.id] || {};
+      const restored = { ...option };
+      if (typeof active === 'boolean') restored.active = active;
+      if (option.value !== undefined && Number.isFinite(value)) {
+        restored.value = Math.min(option.max, Math.max(option.min, value));
+      }
+      return restored;
+    });
+    sessionState = { bookUri: this.bookUri, options };
+    return options;
+  }
+
+  applyFilters(options) {
+    const filters = options
+      .filter(option => option.active)
+      .map(option => filterForOption[option.id](option.value))
+      .join(' ');
+    this.bookContainer.css('filter', filters);
   }
 
   onZoomIn() {
@@ -65,18 +110,13 @@ export default class VisualAdjustmentsProvider {
 
   onAdjustmentChange(event) {
     const { detail } = event;
-    const adjustments = {
-      brightness: (value) => `brightness(${value}%)`,
-      contrast: (value) => `contrast(${value}%)`,
-      grayscale: () => 'grayscale(100%)',
-      invert: () => 'invert(100%)',
-    };
-    const filters = detail.options.reduce((values, option) => {
-      const newValue = `${option.active ? adjustments[option.id](option.value) : ''}`;
-      return newValue ? [...values, newValue] : values;
-    }, []).join(' ');
-
-    this.bookContainer.css('filter', filters);
+    this.applyFilters(detail.options);
+    const isDefault = detail.options.every((option) => {
+      const defaults = visualAdjustmentOptions.find(o => o.id === option.id);
+      return option.active === defaults.active
+        && (option.value === undefined || Number(option.value) === defaults.value);
+    });
+    saveAdjustments(this.bookUri, isDefault ? null : detail.options);
 
     this.optionUpdateComplete(event);
   }
