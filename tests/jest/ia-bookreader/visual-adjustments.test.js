@@ -6,27 +6,18 @@ import {
 import sinon from 'sinon';
 import { IABookVisualAdjustments } from '@/src/ia-bookreader/visual-adjustments/visual-adjustments.js';
 
-const options = [{
-  id: 'contrast',
-  name: 'Adjust contrast',
-  active: true,
-  min: 0,
-  max: 150,
-  step: 1,
-  value: 100,
-}, {
-  id: 'invert',
-  name: 'Invert colors (dark mode)',
-  active: false,
-}, {
-  id: 'brightness',
-  name: 'Adjust brightness',
-  active: false,
-  value: 100,
-}];
-
-const container = (renderHeader = false) => (
-  html`<ia-book-visual-adjustments .options=${options} ?renderHeader=${renderHeader}></ia-book-visual-adjustments>`
+const container = (renderHeader = false, enabledAdjustments = { contrast: true }) => (
+  html`<ia-book-visual-adjustments
+    .adjustments=${{ brightness: 120, contrast: 100 }}
+    .enabledAdjustments=${{
+      brightness: false,
+      contrast: false,
+      invert: false,
+      grayscale: false,
+      ...enabledAdjustments,
+    }}
+    ?renderHeader=${renderHeader}
+  ></ia-book-visual-adjustments>`
 );
 
 describe('<ia-book-visual-adjustments>', () => {
@@ -35,13 +26,18 @@ describe('<ia-book-visual-adjustments>', () => {
   });
 
   test('sets default properties', async () => {
-    const el = await fixture(container());
+    const el = await fixture(html`<ia-book-visual-adjustments></ia-book-visual-adjustments>`);
 
-    expect(el.options).toBeDefined();
-    expect(el.options.length).toEqual(options.length);
+    expect(el.adjustments).toEqual({ brightness: 120, contrast: 120 });
+    expect(el.enabledAdjustments).toEqual({
+      brightness: false,
+      contrast: false,
+      invert: false,
+      grayscale: false,
+    });
     expect(el.renderHeader).toBeDefined();
     expect(el.renderHeader).toBeFalsy();
-    expect(el.activeCount).toBeDefined();
+    expect(el.activeCount).toEqual(0);
     expect(el.showZoomControls).toBeTruthy();
   });
 
@@ -50,10 +46,11 @@ describe('<ia-book-visual-adjustments>', () => {
 
     await el.updateComplete;
 
-    const label = el.shadowRoot.querySelector('label');
-    const checkbox = label.querySelector('input');
-    expect(label.textContent.trim()).toEqual(options[0].name);
-    expect(checkbox.checked).toEqual(true);
+    const [brightness, contrast] = el.shadowRoot.querySelectorAll('.checkbox-label');
+    expect(brightness.textContent.trim()).toEqual('Adjust brightness');
+    expect(brightness.querySelector('input').checked).toEqual(false);
+    expect(contrast.textContent.trim()).toEqual('Adjust contrast');
+    expect(contrast.querySelector('input').checked).toEqual(true);
   });
 
   test('can render header with active options count', async () => {
@@ -63,21 +60,34 @@ describe('<ia-book-visual-adjustments>', () => {
   });
 
   test('does not render active options count element when none are selected', async () => {
-    const el = await fixture(container());
-
-    el.options = [options[1]];
-    await el.updateComplete;
+    const el = await fixture(container(true, { contrast: false }));
 
     expect(el.shadowRoot.querySelector('header p')).toBe(null);
   });
 
-  test('changes option\'s active state when input changed', async () => {
+  test('changes an adjustment\'s active state when input changed', async () => {
     const el = await fixture(container());
 
     el.shadowRoot.querySelector('.checkbox-label input').dispatchEvent(new Event('change'));
     await el.updateComplete;
 
-    expect(el.options[0].active).toEqual(false);
+    expect(el.enabledAdjustments.brightness).toEqual(true);
+    expect(el.activeCount).toEqual(2);
+  });
+
+  test('restores the last range value when toggled back on', async () => {
+    const el = await fixture(container());
+
+    el.adjustments = { ...el.adjustments, contrast: 42 };
+    el.toggleAdjustment('contrast');
+    await el.updateComplete;
+    expect(el.enabledAdjustments.contrast).toBe(false);
+    expect(el.filter).toEqual('');
+
+    el.toggleAdjustment('contrast');
+    await el.updateComplete;
+    expect(el.enabledAdjustments.contrast).toBe(true);
+    expect(el.filter).toEqual('contrast(42%)');
   });
 
   test('renders zoom in and out controls when enabled', async () => {
@@ -98,51 +108,42 @@ describe('<ia-book-visual-adjustments>', () => {
   });
 
   describe('Custom events', () => {
-    test('prepareEventDetails returns proper params', async () => {
-      const el = await fixture(container());
-      await el.updateComplete;
-      const params = el.prepareEventDetails();
-
-      expect(params.activeCount).toBeDefined();
-      expect(typeof (params.activeCount)).toEqual('number');
-      expect(params.changedOptionId).toBeDefined();
-      expect(typeof (params.changedOptionId)).toEqual('string');
-      expect(params.options).toBeDefined();
-      expect(params.options.length).toBeDefined();
-      expect(params.options.length).toBeGreaterThan(0);
-    });
-    test('emitOptionChangedEvent calls for the params', async () => {
-      IABookVisualAdjustments.prototype.prepareEventDetails = sinon.fake();
+    test('emits the css filter and active count', async () => {
       const el = await fixture(container());
       await el.updateComplete;
 
-      expect(el.prepareEventDetails.callCount).toEqual(1);
-    });
-    test('triggers an emitOptionChangedEvent event at firstUpdate', async () => {
-      IABookVisualAdjustments.prototype.emitOptionChangedEvent = sinon.fake();
-      const el = await fixture(container());
+      setTimeout(() => el.toggleAdjustment('invert'));
+      const { detail } = await oneEvent(el, 'filterChanged');
 
-      expect(el.emitOptionChangedEvent.callCount).toEqual(1);
+      expect(detail.filter).toEqual('contrast(100%) invert(100%)');
+      expect(detail.activeCount).toEqual(2);
     });
 
-    test('triggers an emitOptionChangedEvent event when a checkbox\'s change event fires', async () => {
-      IABookVisualAdjustments.prototype.emitOptionChangedEvent = sinon.fake();
+    test('triggers an emitFilterChangedEvent event at firstUpdate', async () => {
+      IABookVisualAdjustments.prototype.emitFilterChangedEvent = sinon.fake();
       const el = await fixture(container());
 
-      expect(el.emitOptionChangedEvent.callCount).toEqual(1); // firstUpdate fire
+      expect(el.emitFilterChangedEvent.callCount).toEqual(1);
+    });
+
+    test('triggers an emitFilterChangedEvent event when a checkbox\'s change event fires', async () => {
+      IABookVisualAdjustments.prototype.emitFilterChangedEvent = sinon.fake();
+      const el = await fixture(container());
+
+      expect(el.emitFilterChangedEvent.callCount).toEqual(1); // firstUpdate fire
 
       el.shadowRoot.querySelector('.checkbox-label input').dispatchEvent(new Event('change'));
-      expect(el.emitOptionChangedEvent.callCount).toEqual(2);
+      expect(el.emitFilterChangedEvent.callCount).toEqual(2);
     });
 
-    test('triggers an emitOptionChangedEvent event when a range\'s change event fires', async () => {
-      IABookVisualAdjustments.prototype.emitOptionChangedEvent = sinon.fake();
+    test('triggers an emitFilterChangedEvent event when a range\'s change event fires', async () => {
+      IABookVisualAdjustments.prototype.emitFilterChangedEvent = sinon.fake();
 
       const el = await fixture(container());
-      expect(el.emitOptionChangedEvent.callCount).toEqual(1); // firstUpdate fire
+      expect(el.emitFilterChangedEvent.callCount).toEqual(1); // firstUpdate fire
 
       el.shadowRoot.querySelector('[name="brightness_range"]').dispatchEvent(new Event('change'));
-      expect(el.emitOptionChangedEvent.callCount).toEqual(2);
+      expect(el.emitFilterChangedEvent.callCount).toEqual(2);
     });
 
     test('emits a zoom out event when zoom out button clicked', async () => {
@@ -151,9 +152,9 @@ describe('<ia-book-visual-adjustments>', () => {
       setTimeout(() => (
         el.shadowRoot.querySelector('.zoom_out').click()
       ));
-      const response = await oneEvent(el, 'visualAdjustmentZoomOut');
+      const response = await oneEvent(el, 'zoom');
 
-      expect(response).toBeDefined();
+      expect(response.detail).toEqual(-1);
     });
 
     test('emits a zoom in event when zoom in button clicked', async () => {
@@ -162,38 +163,29 @@ describe('<ia-book-visual-adjustments>', () => {
       setTimeout(() => (
         el.shadowRoot.querySelector('.zoom_in').click()
       ));
-      const response = await oneEvent(el, 'visualAdjustmentZoomIn');
+      const response = await oneEvent(el, 'zoom');
 
-      expect(response).toBeDefined();
+      expect(response.detail).toEqual(1);
     });
   });
 
-  test('sets range defaults when none supplied', async () => {
+  test('sets range bounds', async () => {
     const el = await fixture(container());
     const brightnessRange = el.shadowRoot.querySelector('[name="brightness_range"]');
 
     expect(brightnessRange.getAttribute('min')).toEqual('0');
-    expect(brightnessRange.getAttribute('max')).toEqual('100');
+    expect(brightnessRange.getAttribute('max')).toEqual('200');
     expect(brightnessRange.getAttribute('step')).toEqual('1');
   });
 
-  test('sets the updated range value on the options prop', async () => {
+  test('sets the updated range value on the adjustments prop when a range\'s input event fires', async () => {
     const el = await fixture(container());
-    const { id } = options[0];
-    const newValue = 120;
+    const range = el.shadowRoot.querySelector('[name="contrast_range"]');
 
-    el.setRangeValue(id, newValue);
+    range.value = '150';
+    range.dispatchEvent(new Event('input'));
     await el.updateComplete;
 
-    expect(el.options[0].value).toEqual(newValue);
-  });
-
-  test('triggers a setRangeValue event when a range\'s input event fires', async () => {
-    IABookVisualAdjustments.prototype.setRangeValue = sinon.fake();
-
-    const el = await fixture(container());
-
-    el.shadowRoot.querySelector('[name="brightness_range"]').dispatchEvent(new Event('input'));
-    expect(el.setRangeValue.callCount).toEqual(1);
+    expect(el.adjustments.contrast).toEqual(150);
   });
 });

@@ -1,23 +1,31 @@
 import { css, html, LitElement, nothing } from "lit";
 import { classMap } from 'lit/directives/class-map.js';
-import { repeat } from "lit/directives/repeat.js";
 import { sharedStyles } from '../../css/sharedStyles.js';
 import "@internetarchive/icon-magnify-minus/icon-magnify-minus.js";
 import "@internetarchive/icon-magnify-plus/icon-magnify-plus.js";
 
-const namespacedEvent = (eventName) => `visualAdjustment${eventName}`;
+/**
+ * The values of the adjustments that have one. These are kept even while the
+ * adjustment is disabled, so re-enabling restores the previous value.
+ * @typedef {object} VisualAdjustments
+ * @property {number} brightness Percentage
+ * @property {number} contrast Percentage
+ */
 
-const events = {
-  optionChange: namespacedEvent("OptionChanged"),
-  zoomIn: namespacedEvent("ZoomIn"),
-  zoomOut: namespacedEvent("ZoomOut"),
-};
+/**
+ * Which adjustments are currently applied
+ * @typedef {object} EnabledAdjustments
+ * @property {boolean} brightness
+ * @property {boolean} contrast
+ * @property {boolean} invert
+ * @property {boolean} grayscale
+ */
 
 export class IABookVisualAdjustments extends LitElement {
   static get properties() {
     return {
-      activeCount: { type: Number },
-      options: { type: Array },
+      adjustments: { type: Object },
+      enabledAdjustments: { type: Object },
       renderHeader: { type: Boolean },
       showZoomControls: { type: Boolean },
     };
@@ -26,128 +34,125 @@ export class IABookVisualAdjustments extends LitElement {
   constructor() {
     super();
 
-    this.activeCount = 0;
-    this.options = [];
+    /** @type {VisualAdjustments} */
+    this.adjustments = { brightness: 120, contrast: 120 };
+    /** @type {EnabledAdjustments} */
+    this.enabledAdjustments = {
+      brightness: false,
+      contrast: false,
+      invert: false,
+      grayscale: false,
+    };
     this.renderHeader = false;
     this.showZoomControls = true;
   }
 
   firstUpdated() {
-    this.activeCount = this.activeOptions.length;
-    this.emitOptionChangedEvent();
+    this.emitFilterChangedEvent();
   }
 
-  /** Gets list of active options
-   * @return array
+  /** Number of adjustments currently applied
+   * @return {number}
    */
-  get activeOptions() {
-    return this.options.reduce(
-      (results, option) => (option.active ? [...results, option.id] : results),
-      [],
-    );
+  get activeCount() {
+    return Object.values(this.enabledAdjustments).filter(Boolean).length;
+  }
+
+  /** The enabled adjustments as a CSS `filter` value ('' when none are enabled)
+   * @return {string}
+   */
+  get filter() {
+    const { brightness, contrast } = this.adjustments;
+    const enabled = this.enabledAdjustments;
+    return [
+      enabled.brightness ? `brightness(${brightness}%)` : null,
+      enabled.contrast ? `contrast(${contrast}%)` : null,
+      enabled.invert ? 'invert(100%)' : null,
+      enabled.grayscale ? 'grayscale(100%)' : null,
+    ].filter(filter => filter).join(' ');
   }
 
   /**
-   * Returns blob that will be emitted by event
+   * Fires custom event when adjustments change
+   * Provides state details: { filter, activeCount }
    */
-  prepareEventDetails(changedOptionId = "") {
-    return {
-      options: this.options,
-      activeCount: this.activeCount,
-      changedOptionId,
-    };
-  }
-
-  /**
-   * Fires custom event when options change
-   * Provides state details: { options, activeCount, changedOptionId }
-   *
-   * @param { string } changedOptionId
-   */
-  emitOptionChangedEvent(changedOptionId = "") {
-    const detail = this.prepareEventDetails(changedOptionId);
+  emitFilterChangedEvent() {
     this.dispatchEvent(
-      new CustomEvent(events.optionChange, {
+      new CustomEvent("filterChanged", {
         bubbles: true,
         composed: true,
-        detail,
+        detail: {
+          filter: this.filter,
+          activeCount: this.activeCount,
+        },
       }),
     );
   }
 
-  emitZoomIn() {
-    this.dispatchEvent(new CustomEvent(events.zoomIn));
-  }
-
-  emitZoomOut() {
-    this.dispatchEvent(new CustomEvent(events.zoomOut));
+  /**
+   * Fires custom event requesting a zoom change
+   * @param { number } delta Zoom steps; positive zooms in, negative zooms out
+   */
+  emitZoom(delta) {
+    this.dispatchEvent(new CustomEvent("zoom", { detail: delta }));
   }
 
   /**
-   * Updates adjustment & component state
-   * updates params of available ajdustment options list
-   * updates active adjustment count
-   * triggers custom event
-   * @param { string } optionName
+   * Toggles an adjustment on/off & notifies listeners
+   * @param { keyof EnabledAdjustments } id
    */
-  changeActiveStateFor(optionName) {
-    const updatedOptions = [...this.options];
-    const checkedOption = updatedOptions.find(
-      (option) => option.id === optionName,
-    );
-    checkedOption.active = !checkedOption.active;
-    this.options = updatedOptions;
-    this.activeCount = this.activeOptions.length;
-    this.emitOptionChangedEvent(checkedOption.id);
-    if (checkedOption.active && checkedOption.value !== undefined) {
-      // move focus to the range input
-      const rangeInput = this.shadowRoot.querySelector(`input[name="${checkedOption.id}_range"]`);
-      requestAnimationFrame(() => {
-        rangeInput?.focus();
-      });
+  toggleAdjustment(id) {
+    const enabling = !this.enabledAdjustments[id];
+    this.enabledAdjustments = { ...this.enabledAdjustments, [id]: enabling };
+    this.emitFilterChangedEvent();
+    // move focus to the range input
+    const rangeInput = this.shadowRoot.querySelector(`input[name="${id}_range"]`);
+    if (enabling && rangeInput) {
+      requestAnimationFrame(() => rangeInput.focus());
     }
   }
 
-  setRangeValue(id, value) {
-    const updatedOptions = [...this.options];
-    updatedOptions.find((o) => o.id === id).value = value;
-    this.options = [...updatedOptions];
-  }
-
   /* render */
-  rangeSlider(option) {
+  /**
+   * Renders a checkbox for an adjustment; if `range` is provided, also a slider
+   * that's shown while the adjustment is enabled.
+   * @param { keyof EnabledAdjustments } id
+   * @param { string } name
+   * @param {object} [options]
+   * @param {{ min: number, max: number, step: number }} [options.range]
+   */
+  renderAdjustment(id, name, { range } = {}) {
+    const active = this.enabledAdjustments[id];
+    const value = this.adjustments[id];
     return html`
-      <label class=${`range${option.active ? " visible" : ""}`}>
-        <span class="sr-only">${option.name}</span>
-        <input
-          type="range"
-          name="${option.id}_range"
-          min=${option.min || 0}
-          max=${option.max || 100}
-          step=${option.step || 1}
-          .value=${option.value}
-          aria-valuetext=${`${option.value}%`}
-          @input=${(e) => this.setRangeValue(option.id, e.target.value)}
-          @change=${() => this.emitOptionChangedEvent()}
-        />
-        <span aria-hidden="true">${option.value}%</span>
-      </label>
-    `;
-  }
-
-  adjustmentCheckbox(option) {
-    return html`
-      <div
-        class="adjustment-option ${classMap({active: option.active, 'has-range': option.value !== undefined})}">
+      <div class="adjustment-option ${classMap({ active, 'has-range': Boolean(range) })}">
         <label class="checkbox-label">
-          ${option.name}
+          ${name}
           <input
             type="checkbox"
-            @change=${() => this.changeActiveStateFor(option.id)}
-            ?checked=${option.active}
+            @change=${() => this.toggleAdjustment(id)}
+            ?checked=${active}
           />
         </label>
-        ${option.value !== undefined ? this.rangeSlider(option) : nothing}
+        ${range ? html`
+          <label class="range ${classMap({ visible: active })}">
+            <span class="sr-only">${name}</span>
+            <input
+              type="range"
+              name="${id}_range"
+              min=${range.min}
+              max=${range.max}
+              step=${range.step}
+              .value=${`${value}`}
+              aria-valuetext=${`${value}%`}
+              @input=${(e) => {
+                this.adjustments = { ...this.adjustments, [id]: Number(e.target.value) };
+              }}
+              @change=${() => this.emitFilterChangedEvent()}
+            />
+            <span aria-hidden="true">${value}%</span>
+          </label>
+        ` : nothing}
       </div>
     `;
   }
@@ -166,10 +171,10 @@ export class IABookVisualAdjustments extends LitElement {
   get zoomControls() {
     return html`
       <h4>Adjust zoom</h4>
-      <button class="zoom_out" @click=${this.emitZoomOut} title="Zoom out" aria-label="Zoom out">
+      <button class="zoom_out" @click=${() => this.emitZoom(-1)} title="Zoom out" aria-label="Zoom out">
         <ia-icon-magnify-minus aria-hidden="true" role="presentation"></ia-icon-magnify-minus>
       </button>
-      <button class="zoom_in" @click=${this.emitZoomIn} title="Zoom in" aria-label="Zoom in">
+      <button class="zoom_in" @click=${() => this.emitZoom(1)} title="Zoom in" aria-label="Zoom in">
         <ia-icon-magnify-plus aria-hidden="true" role="presentation"></ia-icon-magnify-plus>
       </button>
     `;
@@ -179,7 +184,14 @@ export class IABookVisualAdjustments extends LitElement {
   render() {
     return html`
       ${this.headerSection}
-      ${repeat(this.options, (option) => option.id, this.adjustmentCheckbox.bind(this))}
+      ${this.renderAdjustment('brightness', 'Adjust brightness', {
+        range: { min: 0, max: 200, step: 1 },
+      })}
+      ${this.renderAdjustment('contrast', 'Adjust contrast', {
+        range: { min: 0, max: 200, step: 1 },
+      })}
+      ${this.renderAdjustment('invert', 'Invert colors (dark mode)')}
+      ${this.renderAdjustment('grayscale', 'Convert to grayscale')}
       ${this.showZoomControls ? this.zoomControls : nothing}
     `;
   }
