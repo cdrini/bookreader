@@ -103,7 +103,7 @@ export class ExperimentsPlugin extends BookReaderPlugin {
       async enable({ manual = false}) {
         if (BookReader.PLUGINS.translate) return;
 
-        await importAsScript(this.buildAssetPath('plugins/plugin.translate.js'));
+        await import('./translate/plugin.translate.js');
         this.br.initializePlugin('translate');
       }
       async disable() {
