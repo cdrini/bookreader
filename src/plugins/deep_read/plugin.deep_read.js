@@ -165,6 +165,12 @@ export class DeepReadPlugin extends BookReaderPlugin {
           });
         }
         for (const markEl of markEls || []) {
+          // Multi-word marks also wrap the whitespace between lines, which
+          // draws as a bar out to the edge of the paragraph
+          if (!markEl.parentElement.matches('.BRwordElement, .BRspace')) {
+            markEl.replaceWith(...markEl.childNodes);
+            continue;
+          }
           markEl.classList.add(`BRdeepReadEntity--${entity.type}`);
           markEl.classList.toggle('BRdeepReadEntity--active', entity.id === this._panelState.selected?.id);
           markEl.setAttribute('data-entity-id', entity.id);
