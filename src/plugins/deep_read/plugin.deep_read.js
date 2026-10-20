@@ -176,14 +176,28 @@ export class DeepReadPlugin extends BookReaderPlugin {
     if (!textLayer.dataset.deepReadBound) {
       textLayer.dataset.deepReadBound = 'true';
       textLayer.addEventListener('click', this._onTextLayerClick);
+      // 2up flips the page on mouseup, before the click fires
+      textLayer.addEventListener('mouseup', (ev) => {
+        if (this._getClickedEntityEl(ev)) ev.stopPropagation();
+      });
     }
+  }
+
+  /**
+   * @param {MouseEvent} ev
+   * @returns {HTMLElement | null} The entity mark clicked, if the event is a plain click on one
+   */
+  _getClickedEntityEl(ev) {
+    if (ev.button !== 0) return null;
+    // Don't hijack the end of a drag-to-select
+    if (!window.getSelection()?.isCollapsed) return null;
+    return /** @type {HTMLElement} */ (ev.target).closest?.('.BRdeepReadEntity');
   }
 
   /** @param {MouseEvent} ev */
   _onTextLayerClick = (ev) => {
-    const markEl = /** @type {HTMLElement} */ (ev.target).closest?.('.BRdeepReadEntity');
-    // Don't hijack the end of a drag-to-select
-    if (!markEl || !window.getSelection()?.isCollapsed) return;
+    const markEl = this._getClickedEntityEl(ev);
+    if (!markEl) return;
     ev.stopPropagation();
     this.openEntity(markEl.getAttribute('data-entity-id'));
   }
