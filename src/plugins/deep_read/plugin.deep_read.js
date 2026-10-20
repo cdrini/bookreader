@@ -122,8 +122,13 @@ export class DeepReadPlugin extends BookReaderPlugin {
         if (mention.page_index !== pageIndex) continue;
         let markEls;
         try {
-          const fragment = new BookReaderTextFragment({ prefix: null, quote: mention.quote, suffix: null, pageNumber: null, pageIndex });
+          const fragment = mentionToFragment(entity, mention.quote, pageIndex);
           markEls = renderHighlight(textLayer, fragment, 'BRdeepReadEntity');
+          // Context is joined to the quote with whitespace, so it can't match if
+          // the name touches punctuation (e.g. "Bumble's")
+          if (!markEls && (fragment.prefix || fragment.suffix)) {
+            markEls = renderHighlight(textLayer, new BookReaderTextFragment({ ...fragment, prefix: null, suffix: null }), 'BRdeepReadEntity');
+          }
         } catch (e) {
           console.warn('DeepRead: could not find mention in text layer', mention, e);
         }
@@ -225,6 +230,32 @@ export class DeepReadPlugin extends BookReaderPlugin {
   }
 }
 BookReader?.registerPlugin('deepRead', DeepReadPlugin);
+
+/**
+ * Mention quotes are often a whole phrase around the name, so mark just the
+ * name and use the rest of the quote as context.
+ * @param {Pick<DeepReadEntity, 'name' | 'surface_forms'>} entity
+ * @param {string} quote
+ * @param {number} pageIndex
+ * @returns {BookReaderTextFragment}
+ */
+export function mentionToFragment(entity, quote, pageIndex) {
+  const forms = [...entity.surface_forms, entity.name].sort((a, b) => b.length - a.length);
+  for (const form of forms) {
+    const words = form.trim().split(/\s+/).map(w => RegExp.escape(w));
+    const match = words.length && quote.match(new RegExp(`(?<![\\p{L}\\p{N}])${words.join('\\s+')}(?![\\p{L}\\p{N}])`, 'iu'));
+    if (match) {
+      return new BookReaderTextFragment({
+        prefix: quote.slice(0, match.index).trim() || null,
+        quote: match[0],
+        suffix: quote.slice(match.index + match[0].length).trim() || null,
+        pageNumber: null,
+        pageIndex,
+      });
+    }
+  }
+  return new BookReaderTextFragment({ prefix: null, quote, suffix: null, pageNumber: null, pageIndex });
+}
 
 @customElement('br-deep-read-panel')
 export class BrDeepReadPanel extends LitElement {
