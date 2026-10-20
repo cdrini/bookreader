@@ -33,3 +33,10 @@ describe('mentionToFragment', () => {
     expect(mentionToFragment(entity, 'the beadle', 0).quote).toBe('the beadle');
   });
 });
+
+describe('mentionToFragment hyphenation', () => {
+  test('line-end hyphens are joined like the text layer', () => {
+    const f = mentionToFragment({ name: 'Pennsylvania', surface_forms: [] }, 'Central Pennsyl-\nvania Synod', 0);
+    expect([f.prefix, f.quote, f.suffix]).toEqual(['Central', 'Pennsylvania', 'Synod']);
+  });
+});

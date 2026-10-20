@@ -138,8 +138,8 @@ export class DeepReadPlugin extends BookReaderPlugin {
       for (const mention of entity.mentions) {
         if (mention.page_index !== pageIndex) continue;
         let markEls;
+        const fragment = mentionToFragment(entity, mention.quote, pageIndex);
         try {
-          const fragment = mentionToFragment(entity, mention.quote, pageIndex);
           markEls = renderHighlight(textLayer, fragment, 'BRdeepReadEntity');
           // Context is joined to the quote with whitespace, so it can't match if
           // the name touches punctuation (e.g. "Bumble's")
@@ -152,10 +152,13 @@ export class DeepReadPlugin extends BookReaderPlugin {
         if (!markEls) {
           // renderHighlight only marks the first match, and skips text that's
           // already marked, so repeats/overlaps aren't real failures
+          const lettersOf = (/** @type {string} */ str) => str.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+          const firstWord = lettersOf(fragment.quote.split(/\s+/)[0]);
           const alreadyMarked = [...textLayer.querySelectorAll('.BRdeepReadEntity')]
-            .some(el => el.getAttribute('data-entity-id') === entity.id || mention.quote.toLowerCase().includes(el.textContent.trim().toLowerCase()));
+            .some(el => lettersOf(el.textContent) === firstWord);
           (alreadyMarked ? console.debug : console.warn)(`DeepRead: could not ${alreadyMarked ? 'separately mark repeated/overlapping' : 'find'} mention of "${entity.name}" on page index ${pageIndex}`, {
             quote: mention.quote,
+            fragment: fragment.toNormalizedString(),
             surfaceForms: entity.surface_forms,
             leafNum: mention.leaf_num,
             pageText: textLayer.textContent.replace(/\s+/g, ' ').slice(0, 500),
@@ -270,6 +273,9 @@ BookReader?.registerPlugin('deepRead', DeepReadPlugin);
  * @returns {BookReaderTextFragment}
  */
 export function mentionToFragment(entity, quote, pageIndex) {
+  // The text layer draws line-end hyphens with CSS and doesn't separate the
+  // halves, so "Chris-\ntopher" reads as "Christopher" there
+  quote = quote.replace(/(\p{L})-\s*\n\s*/gu, '$1');
   const forms = [...entity.surface_forms, entity.name].sort((a, b) => b.length - a.length);
   for (const form of forms) {
     const words = form.trim().split(/\s+/).map(w => RegExp.escape(w));
