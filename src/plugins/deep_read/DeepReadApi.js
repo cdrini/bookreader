@@ -1,75 +1,106 @@
 // @ts-check
-import { applyVariables } from '../../util/strings.js';
-import { BookReaderTextFragment } from '../../util/TextSelectionManager.js';
 /** @typedef {import('@/src/BookReader.js').default} BookReader */
 
 /**
- * See ./README.md for the HTTP API these types describe.
+ * Mirrors the deep-read backend's schemas; see
+ * https://github.com/internetarchivecanada/deep-read/tree/main/backend
  *
- * @typedef {'person' | 'place' | 'organization' | 'work' | 'event' | 'concept'} DeepReadEntityType
- *
- * @typedef {object} DeepReadEntityRef
- * @property {string} id Stable id, e.g. a Wikidata QID like `Q90`
- * @property {string} label
- * @property {DeepReadEntityType} type
+ * @typedef {'person' | 'place' | 'organization' | 'work' | 'event' | 'subject'} DeepReadEntityType
  *
  * @typedef {object} DeepReadMention
- * @property {string} entityId Key into the response's `entities`
- * @property {string} fragment BookReader text fragment, as in the `?text=` url
- *   param: `pageNumber:prefix-,quote,-suffix`. See `BookReaderTextFragment`.
+ * @property {number | null} leaf_num
+ * @property {number | null} page_index 0-based BookReader page index
+ * @property {string | null} printed_page
+ * @property {string} quote The text as it appears in the OCR
  *
- * @typedef {object} DeepReadPageEntitiesResponse
- * @property {string} identifier
- * @property {number} pageIndex
- * @property {DeepReadMention[]} mentions
- * @property {Record<string, DeepReadEntityRef>} entities
- *
- * @typedef {object} DeepReadEntityDetails
- * @property {string} id
- * @property {string} label
+ * @typedef {object} DeepReadEntity
+ * @property {string} id Stable across requests
  * @property {DeepReadEntityType} type
- * @property {string} [description] Short plain-text summary
- * @property {{ url: string, alt?: string, credit?: string }} [image]
- * @property {{ label: string, value: string }[]} [facts] e.g. born/died, coordinates
- * @property {{ label: string, url: string }[]} [links] e.g. Wikipedia, Open Library
- * @property {string[]} [mentions] Other mentions in this book, as text fragments
- * @property {DeepReadEntityRef[]} [related]
+ * @property {string} name
+ * @property {string[]} surface_forms
+ * @property {number} salience 0-1
+ * @property {DeepReadMention[]} mentions
+ *
+ * @typedef {object} DeepReadEntitiesResponse
+ * @property {string} identifier
+ * @property {number} start_leaf
+ * @property {number} end_leaf
+ * @property {boolean} page_aligned When false, mentions have no page
+ * @property {DeepReadEntity[]} entities
+ * @property {string} model
+ *
+ * @typedef {object} DeepReadBookOccurrence
+ * @property {number} leaf_num
+ * @property {number | null} page_index
+ * @property {string | null} printed_page
+ * @property {string} snippet
+ * @property {string} url
+ *
+ * @typedef {object} DeepReadArchiveReference
+ * @property {string | null} identifier
+ * @property {string} title
+ * @property {string[]} creators
+ * @property {string | null} year
+ * @property {string | null} snippet
+ * @property {string} relation Why this item bears on the entity
+ * @property {string} url
+ *
+ * @typedef {object} DeepReadContextResponse
+ * @property {string} identifier
+ * @property {DeepReadEntity} entity
+ * @property {{ summary: string, occurrences: DeepReadBookOccurrence[] }} book_local
+ * @property {{ summary: string, references: DeepReadArchiveReference[], related_subjects: string[], search_url: string, partial: boolean }} archive_wide
+ * @property {string} model
  */
 
 /**
  * @typedef {object} DeepReadApi
- * @property {(pageIndex: number) => Promise<DeepReadPageEntitiesResponse>} getPageEntities
- * @property {(entityId: string) => Promise<DeepReadEntityDetails>} getEntity
+ * @property {(startLeaf: number, endLeaf: number) => Promise<DeepReadEntitiesResponse>} getEntities
+ * @property {(entity: DeepReadEntity, startLeaf: number, endLeaf: number) => Promise<DeepReadContextResponse>} getContext
  */
 
 /** @implements {DeepReadApi} */
-export class HttpDeepReadApi {
+export class DeepReadServerApi {
   /**
-   * @param {object} params
-   * @param {import('@/src/util/strings.js').StringWithVars} params.pageEntitiesUrl Also has {{pageIndex}}
-   * @param {import('@/src/util/strings.js').StringWithVars} params.entityUrl Also has {{entityId}}
-   * @param {Record<string, any>} params.vars
+   * @param {string} serverUrl e.g. `http://localhost:8010`
+   * @param {string} identifier archive.org identifier
    */
-  constructor({ pageEntitiesUrl, entityUrl, vars }) {
-    this.pageEntitiesUrl = pageEntitiesUrl;
-    this.entityUrl = entityUrl;
-    this.vars = vars;
+  constructor(serverUrl, identifier) {
+    this.baseUrl = `${serverUrl.replace(/\/+$/, '')}/v1/books/${encodeURIComponent(identifier)}`;
   }
 
-  /** @param {number} pageIndex */
-  async getPageEntities(pageIndex) {
-    return this._get(applyVariables(this.pageEntitiesUrl, this.vars, { pageIndex }));
+  /**
+   * @param {number} startLeaf
+   * @param {number} endLeaf
+   */
+  getEntities(startLeaf, endLeaf) {
+    return this._post('/entities', { start_leaf: startLeaf, end_leaf: endLeaf });
   }
 
-  /** @param {string} entityId */
-  async getEntity(entityId) {
-    return this._get(applyVariables(this.entityUrl, this.vars, { entityId }));
+  /**
+   * @param {DeepReadEntity} entity
+   * @param {number} startLeaf
+   * @param {number} endLeaf
+   */
+  getContext(entity, startLeaf, endLeaf) {
+    return this._post('/context', { entity, start_leaf: startLeaf, end_leaf: endLeaf });
   }
 
-  /** @param {string} url */
-  async _get(url) {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`DeepRead API ${resp.status}: ${url}`);
+  /**
+   * @param {string} path
+   * @param {object} body
+   */
+  async _post(path, body) {
+    const resp = await fetch(this.baseUrl + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      // Errors are RFC 9457 problem+json
+      const problem = await resp.json().catch(() => ({}));
+      throw new Error(problem.detail || problem.title || `Deep Read server error ${resp.status}`);
+    }
     return resp.json();
   }
 }
@@ -83,84 +114,104 @@ const PERSON_TITLES = new Set(['Mr', 'Mrs', 'Ms', 'Miss', 'Dr', 'Sir', 'Lady', '
 const PLACE_PREPOSITIONS = new Set(['in', 'at', 'from', 'to', 'near', 'across']);
 
 /**
- * Stand-in for the real API so the UI can be built against any book: picks
- * capitalized phrases out of the page's OCR and invents details for them.
+ * Stand-in for the server so the UI can be worked on offline and on any book:
+ * picks capitalized phrases out of the page OCR and invents context for them.
  * @implements {DeepReadApi}
  */
 export class MockDeepReadApi {
-  /** @type {Map<number, Promise<DeepReadPageEntitiesResponse>>} */
-  _pages = new Map();
-
   /**
    * @param {BookReader} br
-   * @param {{ latencyMs?: number, maxMentionsPerPage?: number }} [options]
+   * @param {{ latencyMs?: number }} [options]
    */
-  constructor(br, { latencyMs = 300, maxMentionsPerPage = 12 } = {}) {
+  constructor(br, { latencyMs = 300 } = {}) {
     this.br = br;
     this.latencyMs = latencyMs;
-    this.maxMentionsPerPage = maxMentionsPerPage;
   }
 
-  /** @param {number} pageIndex */
-  getPageEntities(pageIndex) {
-    if (!this._pages.has(pageIndex)) {
-      this._pages.set(pageIndex, this._fetchPageEntities(pageIndex));
-    }
-    return this._pages.get(pageIndex);
-  }
-
-  /** @param {number} pageIndex */
-  async _fetchPageEntities(pageIndex) {
+  /**
+   * @param {number} startLeaf
+   * @param {number} endLeaf
+   * @returns {Promise<DeepReadEntitiesResponse>}
+   */
+  async getEntities(startLeaf, endLeaf) {
     await sleep(this.latencyMs);
-    const pageXml = await this.br.plugins.textSelection?.getPageText(pageIndex);
-    const words = pageXml ? Array.from(pageXml.querySelectorAll('WORD'), w => w.textContent.trim()).filter(Boolean) : [];
+    const book = this.br.book;
+    /** @type {Map<string, DeepReadEntity>} */
+    const entities = new Map();
+    for (let index = 0; index < book.getNumLeafs(); index++) {
+      const page = book.getPage(index);
+      if (page.leafNum < startLeaf || page.leafNum > endLeaf) continue;
+      const pageXml = await this.br.plugins.textSelection?.getPageText(index);
+      const words = pageXml ? Array.from(pageXml.querySelectorAll('WORD'), w => w.textContent.trim()).filter(Boolean) : [];
+      for (const found of extractMockEntities(words)) {
+        const entity = entities.get(found.id) ?? { ...found, surface_forms: [found.name], salience: 0, mentions: [] };
+        entity.mentions.push({ leaf_num: page.leafNum, page_index: index, printed_page: book.getPageNum(index), quote: found.name });
+        entity.salience = Math.min(1, entity.salience + 0.2);
+        entities.set(found.id, entity);
+      }
+    }
     return {
       identifier: this.br.bookId,
-      pageIndex,
-      ...extractMockEntities(words, pageIndex, this.maxMentionsPerPage),
+      start_leaf: startLeaf,
+      end_leaf: endLeaf,
+      page_aligned: true,
+      entities: [...entities.values()].sort((a, b) => b.salience - a.salience),
+      model: 'mock',
     };
   }
 
-  /** @param {string} entityId */
-  async getEntity(entityId) {
-    await sleep(this.latencyMs);
-    const pages = await Promise.all(this._pages.values());
-    const ref = pages.map(p => p.entities[entityId]).find(Boolean);
-    if (!ref) throw new Error(`Unknown entity ${entityId}`);
-    const wikiSearch = `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(ref.label)}`;
+  /**
+   * @param {DeepReadEntity} entity
+   * @returns {Promise<DeepReadContextResponse>}
+   */
+  async getContext(entity) {
+    await sleep(this.latencyMs * 3);
+    const q = encodeURIComponent(entity.name);
     return {
-      ...ref,
-      description: `(Mock) ${ref.label} is a ${ref.type} mentioned in this book. The real API would return a summary from e.g. Wikidata/Wikipedia here.`,
-      facts: [
-        { label: 'Type', value: ref.type },
-        { label: 'Source', value: 'Mock API' },
-      ],
-      links: [
-        { label: 'Search Wikipedia', url: wikiSearch },
-        { label: 'Search Open Library', url: `https://openlibrary.org/search?q=${encodeURIComponent(ref.label)}` },
-      ],
-      mentions: pages.flatMap(p => p.mentions.filter(m => m.entityId === entityId).map(m => m.fragment)),
-      related: [],
+      identifier: this.br.bookId,
+      entity,
+      book_local: {
+        summary: `(Mock) ${entity.name} is a ${entity.type} that appears in this passage. The server would summarize its role in this book here.`,
+        occurrences: entity.mentions.map(m => ({
+          leaf_num: m.leaf_num,
+          page_index: m.page_index,
+          printed_page: m.printed_page,
+          snippet: `…${m.quote}…`,
+          url: `https://archive.org/details/${this.br.bookId}/page/n${m.page_index}`,
+        })),
+      },
+      archive_wide: {
+        summary: `(Mock) What the rest of archive.org says about ${entity.name}.`,
+        references: [{
+          identifier: null,
+          title: `Search archive.org for "${entity.name}"`,
+          creators: [],
+          year: null,
+          snippet: null,
+          relation: 'Mock reference',
+          url: `https://archive.org/search?query=${q}`,
+        }],
+        related_subjects: [],
+        search_url: `https://archive.org/search?query=${q}&sin=TXT`,
+        partial: false,
+      },
+      model: 'mock',
     };
   }
 }
 
 /**
- * @param {string[]} words The page's OCR words, in reading order
- * @param {number} pageIndex
- * @param {number} maxMentions
- * @returns {Pick<DeepReadPageEntitiesResponse, 'mentions' | 'entities'>}
+ * @param {string[]} words A page's OCR words, in reading order
+ * @returns {Pick<DeepReadEntity, 'id' | 'name' | 'type'>[]} One per mention
  */
-export function extractMockEntities(words, pageIndex, maxMentions) {
-  /** @type {DeepReadMention[]} */
-  const mentions = [];
-  /** @type {Record<string, DeepReadEntityRef>} */
-  const entities = {};
+export function extractMockEntities(words) {
+  /** @type {Pick<DeepReadEntity, 'id' | 'name' | 'type'>[]} */
+  const found = [];
   const bare = words.map(w => w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''));
   const isCapitalized = (/** @type {string} */ w) => /^\p{Lu}\p{Ll}+$/u.test(w) && !NON_ENTITY_WORDS.has(w);
 
   let i = 0;
-  while (i < words.length && mentions.length < maxMentions) {
+  while (i < words.length) {
     if (!isCapitalized(bare[i])) { i++; continue; }
 
     // Extend over up to 3 capitalized words, stopping at punctuation
@@ -171,29 +222,15 @@ export function extractMockEntities(words, pageIndex, maxMentions) {
     const sentenceStart = i === 0 || /[.!?"”:]$/.test(prevWord);
     if (sentenceStart && phrase.length === 1) { i = end; continue; }
 
-    const title = bare[i - 1];
-    const type = PERSON_TITLES.has(title) || phrase.length > 1 ? 'person'
+    /** @type {DeepReadEntityType} */
+    const type = PERSON_TITLES.has(bare[i - 1]) || phrase.length > 1 ? 'person'
       : PLACE_PREPOSITIONS.has(prevWord.toLowerCase()) ? 'place'
-        : 'concept';
-    const label = phrase.join(' ');
-    const id = `mock:${label.toLowerCase().replace(/\s+/g, '-')}`;
-    entities[id] ??= { id, label, type };
-    // toRegExp joins context to the quote with whitespace, so context is only
-    // usable on a side where the quote isn't touching punctuation (commas and
-    // colons are fine; they're normalized to spaces)
-    const leading = words[i].slice(0, words[i].indexOf(bare[i]));
-    const trailing = words[end - 1].slice(words[end - 1].indexOf(bare[end - 1]) + bare[end - 1].length);
-    const fragment = new BookReaderTextFragment({
-      prefix: (!leading && words.slice(Math.max(0, i - 3), i).join(' ')) || null,
-      quote: label,
-      suffix: (/^[,:]?$/.test(trailing) && words.slice(end, end + 3).join(' ')) || null,
-      pageNumber: null,
-      pageIndex,
-    });
-    mentions.push({ entityId: id, fragment: fragment.toNormalizedString() });
+        : 'subject';
+    const name = phrase.join(' ');
+    found.push({ id: `mock-${type}-${name.toLowerCase().replace(/\s+/g, '-')}`, name, type });
     i = end;
   }
-  return { mentions, entities };
+  return found;
 }
 
 /** @param {number} ms */

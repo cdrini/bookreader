@@ -87,6 +87,10 @@ const initializeBookReader = (brManifest) => {
       search: {
         initialSearchTerm: searchTerm,
       },
+      deepRead: {
+        // deep-read backend; `?deepReadServer=mock` uses the in-browser mock instead
+        serverUrl: getFromUrl('deepReadServer', `${location.protocol}//${location.hostname}:8010`).replace(/^mock$/, '') || null,
+      },
     },
   };
 

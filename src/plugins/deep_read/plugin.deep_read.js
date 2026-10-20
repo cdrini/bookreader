@@ -4,54 +4,59 @@ import { customElement, property } from 'lit/decorators.js';
 import { BookReaderPlugin } from '../../BookReaderPlugin.js';
 import { promisifyEvent } from '../../BookReader/utils.js';
 import { BookReaderTextFragment, renderHighlight } from '../../util/TextSelectionManager.js';
-import { HttpDeepReadApi, MockDeepReadApi } from './DeepReadApi.js';
+import { DeepReadServerApi, MockDeepReadApi } from './DeepReadApi.js';
 /** @typedef {import('./DeepReadApi.js').DeepReadApi} DeepReadApi */
-/** @typedef {import('./DeepReadApi.js').DeepReadEntityRef} DeepReadEntityRef */
-/** @typedef {import('./DeepReadApi.js').DeepReadEntityDetails} DeepReadEntityDetails */
-/** @typedef {import('../../BookReader/PageContainer.js').PageContainer} PageContainer */
+/** @typedef {import('./DeepReadApi.js').DeepReadEntity} DeepReadEntity */
+/** @typedef {import('./DeepReadApi.js').DeepReadEntitiesResponse} DeepReadEntitiesResponse */
+/** @typedef {import('./DeepReadApi.js').DeepReadContextResponse} DeepReadContextResponse */
 
 const BookReader = /** @type {typeof import('@/src/BookReader.js').default} */(window.BookReader);
 
 /**
+ * @typedef {object} DeepReadWindow
+ * A run of pages sent to the server as one segment. Windows are fixed (not
+ * centred on the current page) so that they're reusable/cacheable.
+ * @property {number} startIndex
+ * @property {number} endIndex
+ * @property {number} startLeaf
+ * @property {number} endLeaf
+ */
+
+/**
  * Makes named entities (people, places, ...) in the text layer clickable, and
- * shows details about the clicked entity in the side panel.
+ * shows research about the clicked entity in the side panel.
  * Requires the textSelection plugin.
  */
 export class DeepReadPlugin extends BookReaderPlugin {
   options = {
     enabled: true,
-    /**
-     * @type {import('@/src/util/strings.js').StringWithVars}
-     * Url of the entities on a page. Also has {{pageIndex}}. When unset, a
-     * mock API is used.
-     */
-    pageEntitiesUrl: null,
-    /**
-     * @type {import('@/src/util/strings.js').StringWithVars}
-     * Url of an entity's details. Also has {{entityId}}
-     */
-    entityUrl: null,
+    /** @type {string | null} deep-read backend, e.g. `http://localhost:8010`. Uses a mock when unset. */
+    serverUrl: null,
+    /** Pages per entity-extraction request */
+    windowSize: 4,
   }
 
   /** @type {DeepReadApi} */
   api;
 
+  /** @type {Map<number, Promise<DeepReadEntitiesResponse>>} keyed by window startIndex */
+  _windowEntities = new Map();
+
+  /** @type {Map<string, { entity: DeepReadEntity, window: DeepReadWindow }>} */
+  _entitiesById = new Map();
+
   /** @type {BrDeepReadPanel} */
   _panel;
 
-  /** @type {string | null} */
-  activeEntityId = null;
+  /** @type {Partial<BrDeepReadPanel>} Survives the panel being re-created */
+  _panelState = {};
 
   /** @override */
   init() {
     if (!this.options.enabled || !this.br.plugins.textSelection?.options.enabled) return;
 
-    this.api = this.options.pageEntitiesUrl
-      ? new HttpDeepReadApi({
-        pageEntitiesUrl: this.options.pageEntitiesUrl,
-        entityUrl: this.options.entityUrl,
-        vars: { bookId: this.br.bookId, ...this.br.options.vars },
-      })
+    this.api = this.options.serverUrl
+      ? new DeepReadServerApi(this.options.serverUrl, this.br.bookId)
       : new MockDeepReadApi(this.br);
 
     this.br.on('textLayerRendered', (_, { pageIndex, pageContainer }) => {
@@ -59,8 +64,43 @@ export class DeepReadPlugin extends BookReaderPlugin {
       const textLayer = pageContainer.$container[0].querySelector('.BRtextLayer');
       if (textLayer) this.renderPageEntities(pageIndex, textLayer);
     });
+    this.br.on(BookReader.eventNames.pageChanged, () => this._updateWindowList());
 
     this._initPanel();
+  }
+
+  /**
+   * @param {number} pageIndex
+   * @returns {DeepReadWindow}
+   */
+  getWindow(pageIndex) {
+    const size = this.options.windowSize;
+    const startIndex = Math.floor(pageIndex / size) * size;
+    const endIndex = Math.min(startIndex + size, this.br.book.getNumLeafs()) - 1;
+    return {
+      startIndex,
+      endIndex,
+      startLeaf: this.br.book.getPage(startIndex).leafNum,
+      endLeaf: this.br.book.getPage(endIndex).leafNum,
+    };
+  }
+
+  /**
+   * @param {number} pageIndex
+   * @returns {Promise<DeepReadEntitiesResponse>}
+   */
+  getWindowEntities(pageIndex) {
+    const win = this.getWindow(pageIndex);
+    if (!this._windowEntities.has(win.startIndex)) {
+      const promise = this.api.getEntities(win.startLeaf, win.endLeaf).then(resp => {
+        for (const entity of resp.entities) this._entitiesById.set(entity.id, { entity, window: win });
+        return resp;
+      });
+      // Allow retrying on failure
+      promise.catch(() => this._windowEntities.delete(win.startIndex));
+      this._windowEntities.set(win.startIndex, promise);
+    }
+    return this._windowEntities.get(win.startIndex);
   }
 
   /**
@@ -70,28 +110,29 @@ export class DeepReadPlugin extends BookReaderPlugin {
   async renderPageEntities(pageIndex, textLayer) {
     let resp;
     try {
-      resp = await this.api.getPageEntities(pageIndex);
+      resp = await this.getWindowEntities(pageIndex);
     } catch (e) {
-      console.warn('DeepRead: failed to fetch page entities', pageIndex, e);
+      console.warn('DeepRead: failed to fetch entities', pageIndex, e);
       return;
     }
     if (!textLayer.isConnected) return;
 
-    for (const mention of resp.mentions) {
-      const entity = resp.entities[mention.entityId];
-      if (!entity) continue;
-      let markEls;
-      try {
-        const fragment = BookReaderTextFragment.fromString(mention.fragment, this.br.book, pageIndex);
-        markEls = renderHighlight(textLayer, fragment, 'BRdeepReadEntity');
-      } catch (e) {
-        console.warn('DeepRead: could not render mention', mention, e);
-      }
-      for (const markEl of markEls || []) {
-        markEl.classList.add(`BRdeepReadEntity--${entity.type}`);
-        markEl.classList.toggle('BRdeepReadEntity--active', entity.id === this.activeEntityId);
-        markEl.setAttribute('data-entity-id', entity.id);
-        markEl.setAttribute('title', `${entity.label} (${entity.type})`);
+    for (const entity of resp.entities) {
+      for (const mention of entity.mentions) {
+        if (mention.page_index !== pageIndex) continue;
+        let markEls;
+        try {
+          const fragment = new BookReaderTextFragment({ prefix: null, quote: mention.quote, suffix: null, pageNumber: null, pageIndex });
+          markEls = renderHighlight(textLayer, fragment, 'BRdeepReadEntity');
+        } catch (e) {
+          console.warn('DeepRead: could not find mention in text layer', mention, e);
+        }
+        for (const markEl of markEls || []) {
+          markEl.classList.add(`BRdeepReadEntity--${entity.type}`);
+          markEl.classList.toggle('BRdeepReadEntity--active', entity.id === this._panelState.selected?.id);
+          markEl.setAttribute('data-entity-id', entity.id);
+          markEl.setAttribute('title', `${entity.name} (${entity.type})`);
+        }
       }
     }
 
@@ -112,50 +153,44 @@ export class DeepReadPlugin extends BookReaderPlugin {
 
   /** @param {string} entityId */
   async openEntity(entityId) {
-    this.activeEntityId = entityId;
+    const found = this._entitiesById.get(entityId);
+    if (!found) return;
+    const { entity, window: win } = found;
     this.br.refs.$br[0].querySelectorAll('.BRdeepReadEntity').forEach(el => {
       el.classList.toggle('BRdeepReadEntity--active', el.getAttribute('data-entity-id') === entityId);
     });
 
     this.br.shell?.updateSideMenu('deepRead', 'open');
-    this._updatePanel({ entity: null, mentions: [], loading: true, error: null });
+    this._updatePanel({ selected: entity, context: null, loading: true, error: null });
     try {
-      const entity = await this.api.getEntity(entityId);
+      const context = await this.api.getContext(entity, win.startLeaf, win.endLeaf);
       // A later click wins
-      if (this.activeEntityId !== entityId) return;
-      this._updatePanel({ entity, mentions: this._parseMentions(entity.mentions || []), loading: false });
+      if (this._panelState.selected?.id !== entityId) return;
+      this._updatePanel({ context, loading: false });
     } catch (e) {
-      if (this.activeEntityId !== entityId) return;
-      this._updatePanel({ loading: false, error: String(e) });
+      if (this._panelState.selected?.id !== entityId) return;
+      this._updatePanel({ loading: false, error: e.message || String(e) });
     }
   }
 
-  /**
-   * @param {string[]} fragmentStrs
-   * @returns {DeepReadPanelMention[]}
-   */
-  _parseMentions(fragmentStrs) {
-    return fragmentStrs.flatMap(str => {
-      try {
-        const fragment = BookReaderTextFragment.fromString(str, this.br.book, this.br.currentIndex());
-        return [{ fragment, pageLabel: this.br.book.getPageName(fragment.pageIndex) }];
-      } catch (e) {
-        console.warn('DeepRead: bad mention fragment', str, e);
-        return [];
-      }
-    });
+  closeEntity() {
+    this.br.refs.$br[0].querySelectorAll('.BRdeepReadEntity--active').forEach(el => el.classList.remove('BRdeepReadEntity--active'));
+    this._updatePanel({ selected: null, context: null, loading: false, error: null });
   }
 
-  /** @param {BookReaderTextFragment} fragment */
-  jumpToMention(fragment) {
-    this.br.jumpToIndex(fragment.pageIndex, { ariaLive: true });
+  async _updateWindowList() {
+    const pageIndex = this.br.currentIndex();
+    this._updatePanel({ windowEntities: null, windowError: null });
+    try {
+      const resp = await this.getWindowEntities(pageIndex);
+      if (this.getWindow(this.br.currentIndex()).startIndex !== this.getWindow(pageIndex).startIndex) return;
+      this._updatePanel({ windowEntities: resp.entities, pageAligned: resp.page_aligned });
+    } catch (e) {
+      this._updatePanel({ windowError: e.message || String(e) });
+    }
   }
 
-  /** @typedef {Partial<Pick<BrDeepReadPanel, 'entity' | 'mentions' | 'loading' | 'error'>>} DeepReadPanelState */
-  /** @type {DeepReadPanelState} */
-  _panelState = { entity: null, mentions: [], loading: false, error: null };
-
-  /** @param {DeepReadPanelState} state */
+  /** @param {Partial<BrDeepReadPanel>} state */
   _updatePanel(state) {
     Object.assign(this._panelState, state);
     if (this._panel) Object.assign(this._panel, this._panelState);
@@ -180,23 +215,29 @@ export class DeepReadPlugin extends BookReaderPlugin {
         Object.assign(this._panel, this._panelState);
       }}"
         @entityClick="${(e) => this.openEntity(e.detail.entityId)}"
-        @mentionClick="${(e) => this.jumpToMention(e.detail.fragment)}"
+        @back="${() => this.closeEntity()}"
+        @pageClick="${(e) => this.br.jumpToIndex(e.detail.pageIndex, { ariaLive: true })}"
       ></br-deep-read-panel>`,
     };
     this.br.shell.addMenuShortcut('deepRead');
     this.br.shell.updateMenuContents();
+    this._updateWindowList();
   }
 }
 BookReader?.registerPlugin('deepRead', DeepReadPlugin);
 
-/** @typedef {{ fragment: BookReaderTextFragment, pageLabel: string }} DeepReadPanelMention */
-
 @customElement('br-deep-read-panel')
 export class BrDeepReadPanel extends LitElement {
-  /** @type {DeepReadEntityDetails | null} */
-  @property({ type: Object }) entity = null;
-  /** @type {DeepReadPanelMention[]} */
-  @property({ type: Array }) mentions = [];
+  /** @type {DeepReadEntity[] | null} Entities in the current window; null while loading */
+  @property({ type: Array }) windowEntities = null;
+  @property({ type: Boolean }) pageAligned = true;
+  /** @type {string | null} */
+  @property({ type: String }) windowError = null;
+
+  /** @type {DeepReadEntity | null} */
+  @property({ type: Object }) selected = null;
+  /** @type {DeepReadContextResponse | null} */
+  @property({ type: Object }) context = null;
   @property({ type: Boolean }) loading = false;
   /** @type {string | null} */
   @property({ type: String }) error = null;
@@ -207,66 +248,95 @@ export class BrDeepReadPanel extends LitElement {
   }
 
   render() {
-    if (this.loading) return html`<p class="hint">Loading…</p>`;
-    if (this.error) return html`<p class="hint error">${this.error}</p>`;
-    if (!this.entity) {
-      return html`<p class="hint">Click an underlined name in the text to learn more about it.</p>`;
-    }
-    const e = this.entity;
+    return this.selected ? this._renderEntity(this.selected) : this._renderWindowList();
+  }
+
+  _renderWindowList() {
+    if (this.windowError) return html`<p class="hint error">${this.windowError}</p>`;
+    if (!this.windowEntities) return html`<p class="hint">Finding people, places and things on these pages…</p>`;
+    if (!this.windowEntities.length) return html`<p class="hint">Nothing found on these pages.</p>`;
     return html`
-      <article>
-        ${e.image ? html`<img class="image" src="${e.image.url}" alt="${e.image.alt || ''}"/>` : nothing}
-        <h3>${e.label}</h3>
-        <span class="type type--${e.type}">${e.type}</span>
-        ${e.description ? html`<p>${e.description}</p>` : nothing}
-        ${e.facts?.length ? html`<dl>${e.facts.map(f => html`<dt>${f.label}</dt><dd>${f.value}</dd>`)}</dl>` : nothing}
-        ${e.links?.length ? html`<ul class="links">${e.links.map(l => html`<li><a href="${l.url}" target="_blank" rel="noopener">${l.label}</a></li>`)}</ul>` : nothing}
-        ${this.mentions.length ? html`
-          <h4>Mentions in this book</h4>
-          <ol class="mentions">${this.mentions.map(m => this._renderMention(m))}</ol>
-        ` : nothing}
-        ${e.related?.length ? html`
-          <h4>Related</h4>
-          <ul class="related">${e.related.map(r => html`<li><button @click=${() => this._emit('entityClick', { entityId: r.id })}>${r.label}</button></li>`)}</ul>
-        ` : nothing}
-      </article>
+      <p class="hint">Click an underlined name in the text, or pick one below.</p>
+      ${this.pageAligned ? nothing : html`<p class="hint warning">This book has no per-page text, so names can't be marked on the page.</p>`}
+      <ul class="entities">${this.windowEntities.map(e => html`
+        <li><button @click=${() => this._emit('entityClick', { entityId: e.id })}>
+          <span class="type type--${e.type}">${e.type}</span> ${e.name}
+        </button></li>
+      `)}</ul>
     `;
   }
 
-  /** @param {DeepReadPanelMention} mention */
-  _renderMention({ fragment: f, pageLabel }) {
-    return html`<li><button @click=${() => this._emit('mentionClick', { fragment: f })}>
-      <span class="page">${pageLabel}</span>
-      …${f.prefix ?? ""} <b>${f.quote ?? `${f.quoteStart}…${f.quoteEnd}`}</b> ${f.suffix ?? ""}…
-    </button></li>`;
+  /** @param {DeepReadEntity} entity */
+  _renderEntity(entity) {
+    const ctx = this.context;
+    return html`
+      <button class="back" @click=${() => this._emit('back')}>← All on these pages</button>
+      <h3>${entity.name}</h3>
+      <span class="type type--${entity.type}">${entity.type}</span>
+      ${this.loading ? html`<p class="hint">Researching… this can take a little while.</p>` : nothing}
+      ${this.error ? html`<p class="hint error">${this.error}</p>` : nothing}
+      ${ctx ? html`
+        <section>
+          <h4>In this book</h4>
+          <p>${ctx.book_local.summary}</p>
+          <ol class="occurrences">${ctx.book_local.occurrences.map(o => html`
+            <li><button @click=${() => o.page_index != null && this._emit('pageClick', { pageIndex: o.page_index })}>
+              <span class="meta">${o.printed_page ? `Page ${o.printed_page}` : `Leaf ${o.leaf_num}`}</span>
+              ${o.snippet}
+            </button></li>
+          `)}</ol>
+        </section>
+        <section>
+          <h4>Across archive.org</h4>
+          ${ctx.archive_wide.partial ? html`<p class="hint warning">Some sources were unavailable; this may be incomplete.</p>` : nothing}
+          <p>${ctx.archive_wide.summary}</p>
+          <ul class="references">${ctx.archive_wide.references.map(r => html`
+            <li>
+              <a href="${r.url}" target="_blank" rel="noopener">${r.title}</a>
+              ${r.creators.length || r.year ? html`<span class="meta">${[r.creators.join(', '), r.year].filter(Boolean).join(' · ')}</span>` : nothing}
+              <span class="relation">${r.relation}</span>
+              ${r.snippet ? html`<blockquote>${r.snippet}</blockquote>` : nothing}
+            </li>
+          `)}</ul>
+          ${ctx.archive_wide.related_subjects.length ? html`
+            <p class="meta">Related: ${ctx.archive_wide.related_subjects.join(', ')}</p>
+          ` : nothing}
+          <a href="${ctx.archive_wide.search_url}" target="_blank" rel="noopener">Search archive.org for "${entity.name}"</a>
+        </section>
+        <p class="meta model">Generated by ${ctx.model}</p>
+      ` : nothing}
+    `;
   }
 
   /**
    * @param {string} name
-   * @param {object} detail
+   * @param {object} [detail]
    */
-  _emit(name, detail) {
+  _emit(name, detail = {}) {
     this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
   }
 
   static styles = css`
-    :host { display: block; padding: 10px; color: white; font-size: 14px; }
+    :host { display: block; padding: 10px; color: white; font-size: 14px; line-height: 1.4; }
     .hint { opacity: 0.8; }
-    .error { color: #ffb4a8; }
-    h3 { margin: 0 0 4px; font-size: 18px; }
-    h4 { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; opacity: 0.7; }
-    .image { max-width: 100%; border-radius: 4px; margin-bottom: 8px; }
-    .type { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: rgba(255, 255, 255, 0.15); }
-    dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0; }
-    dt { opacity: 0.7; }
-    dd { margin: 0; }
+    .error { color: #ffb4a8; opacity: 1; }
+    .warning { color: #ffe7a3; opacity: 1; }
+    h3 { margin: 8px 0 4px; font-size: 18px; }
+    h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+    p { margin: 6px 0; }
+    .type { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 8px; background: rgba(255, 255, 255, 0.15); }
+    .meta { display: block; font-size: 12px; opacity: 0.7; }
+    .relation { display: block; }
+    .model { margin-top: 16px; }
     a { color: #8fc1ff; }
     ul, ol { padding: 0; margin: 0; list-style: none; }
+    .references li { margin: 0 0 10px; }
+    blockquote { margin: 4px 0 0; padding-left: 8px; border-left: 2px solid rgba(255, 255, 255, 0.3); font-size: 12px; opacity: 0.85; }
     button {
       all: unset; cursor: pointer; display: block; width: 100%; box-sizing: border-box;
-      padding: 6px 8px; margin: 2px 0; border-radius: 4px; line-height: 1.35;
+      padding: 6px 8px; margin: 2px 0; border-radius: 4px;
     }
     button:hover, button:focus-visible { background: rgba(255, 255, 255, 0.1); }
-    .page { display: block; font-size: 11px; opacity: 0.7; }
+    .back { width: auto; display: inline-block; font-size: 12px; opacity: 0.8; }
   `;
 }
