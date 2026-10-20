@@ -93,7 +93,10 @@ export class DeepReadPlugin extends BookReaderPlugin {
     const win = this.getWindow(pageIndex);
     if (!this._windowEntities.has(win.startIndex)) {
       const promise = this.api.getEntities(win.startLeaf, win.endLeaf).then(resp => {
-        for (const entity of resp.entities) this._entitiesById.set(entity.id, { entity, window: win });
+        for (const entity of resp.entities) {
+          entity.mentions.forEach(m => this._fixPageIndex(m));
+          this._entitiesById.set(entity.id, { entity, window: win });
+        }
         return resp;
       });
       // Allow retrying on failure
@@ -101,6 +104,20 @@ export class DeepReadPlugin extends BookReaderPlugin {
       this._windowEntities.set(win.startIndex, promise);
     }
     return this._windowEntities.get(win.startIndex);
+  }
+
+  /**
+   * The server's page_index can disagree with BookReader's (e.g. it can miss
+   * leaves excluded from the access formats), so derive it from the leaf.
+   * @param {{ leaf_num: number | null, page_index: number | null }} loc
+   */
+  _fixPageIndex(loc) {
+    if (loc.leaf_num == null) return;
+    const pageIndex = this.br.book.leafNumToIndex(loc.leaf_num);
+    if (pageIndex !== loc.page_index) {
+      console.debug(`DeepRead: server page_index ${loc.page_index} for leaf ${loc.leaf_num}; BookReader has ${pageIndex}`);
+    }
+    loc.page_index = pageIndex;
   }
 
   /**
@@ -130,7 +147,19 @@ export class DeepReadPlugin extends BookReaderPlugin {
             markEls = renderHighlight(textLayer, new BookReaderTextFragment({ ...fragment, prefix: null, suffix: null }), 'BRdeepReadEntity');
           }
         } catch (e) {
-          console.warn('DeepRead: could not find mention in text layer', mention, e);
+          console.warn('DeepRead: error rendering mention', mention, e);
+        }
+        if (!markEls) {
+          // renderHighlight only marks the first match, and skips text that's
+          // already marked, so repeats/overlaps aren't real failures
+          const alreadyMarked = [...textLayer.querySelectorAll('.BRdeepReadEntity')]
+            .some(el => el.getAttribute('data-entity-id') === entity.id || mention.quote.toLowerCase().includes(el.textContent.trim().toLowerCase()));
+          (alreadyMarked ? console.debug : console.warn)(`DeepRead: could not ${alreadyMarked ? 'separately mark repeated/overlapping' : 'find'} mention of "${entity.name}" on page index ${pageIndex}`, {
+            quote: mention.quote,
+            surfaceForms: entity.surface_forms,
+            leafNum: mention.leaf_num,
+            pageText: textLayer.textContent.replace(/\s+/g, ' ').slice(0, 500),
+          });
         }
         for (const markEl of markEls || []) {
           markEl.classList.add(`BRdeepReadEntity--${entity.type}`);
@@ -169,6 +198,7 @@ export class DeepReadPlugin extends BookReaderPlugin {
     this._updatePanel({ selected: entity, context: null, loading: true, error: null });
     try {
       const context = await this.api.getContext(entity, win.startLeaf, win.endLeaf);
+      context.book_local.occurrences.forEach(o => this._fixPageIndex(o));
       // A later click wins
       if (this._panelState.selected?.id !== entityId) return;
       this._updatePanel({ context, loading: false });
