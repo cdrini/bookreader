@@ -106,18 +106,24 @@ export class TranslatePlugin extends BookReaderPlugin {
     // Note await above lets _render function properly, since it gives the browser
     // time to render the rest of bookreader, which _render depends on
 
-    // Detect browser language and use as default "To" language if available
-    const browserLang = navigator.language;
-    const browserLangCode = toISO6391(browserLang);
-    const browserLangAvailable = browserLangCode &&
-      this.translationManager.toLanguages.some(lang => lang.code === browserLangCode);
-
-    // Set browser language as default if available, otherwise fallback to English
-    this.langToCode = browserLangAvailable
-      ? browserLangCode
-      : this.translationManager.toLanguages[0].code;
-
+    this.langToCode = this.getDefaultToLanguage();
     this._render();
+  }
+
+  /**
+   * The first of the browser's languages we have a model for, else the first available language (English).
+   * Matches exactly first, then by base language (e.g. fr-CA -> fr, zh-CN -> zh-Hans).
+   * @returns {string}
+   */
+  getDefaultToLanguage() {
+    const available = this.translationManager.toLanguages.map(lang => lang.code);
+    const baseLanguage = (code) => code.split('-')[0].toLowerCase();
+    for (const browserLang of navigator.languages || [navigator.language]) {
+      const match = available.find(code => code.toLowerCase() === browserLang.toLowerCase())
+        || available.find(code => baseLanguage(code) === baseLanguage(browserLang));
+      if (match) return match;
+    }
+    return available[0];
   }
 
   /** @param {HTMLElement} page*/
